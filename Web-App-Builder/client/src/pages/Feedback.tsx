@@ -1,12 +1,19 @@
 import { useState } from "react";
-import { useFeedbackQuery } from "@/hooks/use-pm-data";
+import { useFeedbackQuery, useCreateFeedback } from "@/hooks/use-pm-data";
 import { format } from "date-fns";
-import { MessageSquare, ThumbsUp, ThumbsDown, Minus } from "lucide-react";
+import { MessageSquare, ThumbsUp, ThumbsDown, Minus, Send } from "lucide-react";
 import { DataSimulator } from "@/components/DataSimulator";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Feedback() {
+  const { toast } = useToast();
   const [searchText, setSearchText] = useState("");
   const [sentimentFilter, setSentimentFilter] = useState("");
+  const [content, setContent] = useState("");
+  const [source, setSource] = useState("web");
+
+  const { mutateAsync: createFeedback, isPending: isSubmitting } = useCreateFeedback();
 
   const { data: feedbackResponse, isLoading } = useFeedbackQuery({
     query: searchText || undefined,
@@ -23,12 +30,92 @@ export default function Feedback() {
     }
   };
 
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    const trimmedContent = content.trim();
+    if (trimmedContent.length < 10) {
+      toast({
+        title: "Feedback too short",
+        description: "Please enter at least 10 characters.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await createFeedback({
+        content: trimmedContent,
+        source,
+      });
+      setContent("");
+      setSource("web");
+      toast({
+        title: "Feedback submitted",
+        description: "Your feedback was saved successfully.",
+      });
+    } catch {
+      toast({
+        title: "Submission failed",
+        description: "We could not save your feedback right now.",
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in">
       <div>
         <h1 className="text-3xl md:text-4xl text-foreground">User Feedback</h1>
         <p className="text-muted-foreground mt-1">Direct feedback from users, analyzed by AI.</p>
       </div>
+
+      <form onSubmit={handleSubmit} className="glass-card rounded-2xl border border-border p-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-primary/10 rounded-lg text-primary">
+            <Send className="h-4 w-4" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">Submit feedback</h2>
+            <p className="text-sm text-muted-foreground">Capture a new user comment without leaving the page.</p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-[1fr_220px]">
+          <div>
+            <label className="text-sm font-medium text-foreground mb-2 block">Message</label>
+            <textarea
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+              placeholder="What should we improve?"
+              className="w-full min-h-32 rounded-xl border border-border/50 bg-background px-4 py-3 text-sm focus:ring-2 focus:ring-primary/20"
+              maxLength={1000}
+            />
+            <div className="mt-2 text-xs text-muted-foreground">{content.length}/1000 characters</div>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-medium text-foreground mb-2 block">Source</label>
+              <select
+                value={source}
+                onChange={(event) => setSource(event.target.value)}
+                className="w-full rounded-xl border border-border/50 bg-background px-4 py-3 text-sm"
+              >
+                <option value="web">Web app</option>
+                <option value="in-app">In app</option>
+                <option value="email">Email</option>
+                <option value="support">Support</option>
+              </select>
+            </div>
+
+            <Button type="submit" className="w-full gap-2" disabled={isSubmitting || content.trim().length < 10}>
+              <Send className="h-4 w-4" />
+              {isSubmitting ? "Submitting..." : "Submit feedback"}
+            </Button>
+          </div>
+        </div>
+      </form>
 
       <div className="glass-card rounded-2xl border border-border p-4 flex flex-col md:flex-row gap-4 md:items-center">
         <div className="relative flex-1 max-w-md">

@@ -126,6 +126,7 @@ export function useCreateFeedback() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.stats.get.path] });
       queryClient.invalidateQueries({ queryKey: [api.feedback.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.feedback.query.path] });
     },
   });
 }

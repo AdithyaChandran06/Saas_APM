@@ -67,6 +67,8 @@ let profileState = {
 let apiKeysState: Array<{ id: number | string; name: string; key: string; createdAt: string; lastUsed: string | null }> = [];
 let alertsState: AlertItem[] = [];
 let hasExtendedDbTables = true;
+const recommendationGenerateQuota = new Map<string, { dayKey: string; count: number }>();
+const DAILY_RECOMMENDATION_GENERATE_LIMIT = 10;
 
 function paginate<T>(items: T[], limit: number, offset: number) {
   const sliced = items.slice(offset, offset + limit);
@@ -97,6 +99,23 @@ function weekKey(date: Date) {
   const day = Math.floor((date.getTime() - start.getTime()) / 86400000);
   const week = Math.floor((day + start.getUTCDay()) / 7) + 1;
   return `${year}-W${week}`;
+}
+
+function utcDayKey(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getRecommendationQuotaState(workspaceId: string) {
+  const dayKey = utcDayKey();
+  const current = recommendationGenerateQuota.get(workspaceId);
+
+  if (!current || current.dayKey !== dayKey) {
+    const freshState = { dayKey, count: 0 };
+    recommendationGenerateQuota.set(workspaceId, freshState);
+    return freshState;
+  }
+
+  return current;
 }
 
 async function getWorkspaceId() {
@@ -396,6 +415,15 @@ export async function registerRoutes(
 
   app.post(api.recommendations.generate.path, async (req, res) => {
     try {
+      const workspaceId = String((await getWorkspaceId()) ?? "local-workspace");
+      const quotaState = getRecommendationQuotaState(workspaceId);
+
+      if (quotaState.count >= DAILY_RECOMMENDATION_GENERATE_LIMIT) {
+        return res.status(429).json({
+          message: "Daily recommendation generation limit reached for this workspace.",
+        });
+      }
+
       const events = await storage.getEvents(50);
       const feedback = await storage.getFeedback();
       const stats = {
@@ -460,6 +488,8 @@ export async function registerRoutes(
           status: "new",
         });
       }
+
+      quotaState.count += 1;
 
       res.json({ message: "Recommendations generated" });
     } catch (error) {
