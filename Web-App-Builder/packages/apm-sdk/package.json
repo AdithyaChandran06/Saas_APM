@@ -1,0 +1,23 @@
+{
+  "name": "@saas-apm/apm-sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for ingesting events, errors, and performance metrics into SaaS APM",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "apm",
+    "analytics",
+    "monitoring",
+    "sdk"
+  ],
+  "license": "MIT"
+}

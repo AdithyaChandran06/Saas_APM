@@ -13,9 +13,12 @@ import {
   type Recommendation,
   type User,
 } from "@shared/schema";
-import { eq, desc, count } from "drizzle-orm";
+import { and, eq, desc, count } from "drizzle-orm";
 
 type FeedbackInput = InsertFeedback & { sentiment?: string | null };
+type WorkspaceScopedEvent = InsertEvent & { workspaceId: number };
+type WorkspaceScopedFeedback = FeedbackInput & { workspaceId: number };
+type WorkspaceScopedRecommendation = InsertRecommendation & { workspaceId: number };
 
 export interface IStorage {
   // Users
@@ -24,25 +27,25 @@ export interface IStorage {
   createUser(user: UpsertUser): Promise<User>;
 
   // Events
-  createEvent(event: InsertEvent): Promise<Event>;
-  getEvents(limit?: number): Promise<Event[]>;
-  getEventsCount(): Promise<number>;
+  createEvent(event: WorkspaceScopedEvent): Promise<Event>;
+  getEvents(limit?: number, workspaceId?: number): Promise<Event[]>;
+  getEventsCount(workspaceId?: number): Promise<number>;
 
   // Feedback
-  createFeedback(feedback: FeedbackInput): Promise<Feedback>;
-  getFeedback(): Promise<Feedback[]>;
-  getFeedbackCount(): Promise<number>;
+  createFeedback(feedback: WorkspaceScopedFeedback): Promise<Feedback>;
+  getFeedback(workspaceId?: number): Promise<Feedback[]>;
+  getFeedbackCount(workspaceId?: number): Promise<number>;
 
   // Recommendations
-  createRecommendation(recommendation: InsertRecommendation): Promise<Recommendation>;
-  getRecommendations(): Promise<Recommendation[]>;
-  getRecommendation(id: number): Promise<Recommendation | undefined>;
-  updateRecommendation(id: number, updates: Partial<InsertRecommendation>): Promise<Recommendation | undefined>;
-  deleteRecommendation(id: number): Promise<boolean>;
-  clearRecommendations(): Promise<void>; // For regenerating
+  createRecommendation(recommendation: WorkspaceScopedRecommendation): Promise<Recommendation>;
+  getRecommendations(workspaceId?: number): Promise<Recommendation[]>;
+  getRecommendation(id: number, workspaceId?: number): Promise<Recommendation | undefined>;
+  updateRecommendation(id: number, updates: Partial<InsertRecommendation>, workspaceId?: number): Promise<Recommendation | undefined>;
+  deleteRecommendation(id: number, workspaceId?: number): Promise<boolean>;
+  clearRecommendations(workspaceId?: number): Promise<void>; // For regenerating
 
   // Stats
-  getActiveUsersCount(): Promise<number>;
+  getActiveUsersCount(workspaceId?: number): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -66,79 +69,105 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Events
-  async createEvent(event: InsertEvent): Promise<Event> {
+  async createEvent(event: WorkspaceScopedEvent): Promise<Event> {
     const [newEvent] = await db!.insert(events).values(event).returning();
     return newEvent;
   }
 
-  async getEvents(limit: number = 100): Promise<Event[]> {
-    return db!.select().from(events).orderBy(desc(events.timestamp)).limit(limit);
+  async getEvents(limit: number = 100, workspaceId?: number): Promise<Event[]> {
+    const query = db!.select().from(events);
+    const filtered = workspaceId === undefined ? query : query.where(eq(events.workspaceId, workspaceId));
+    return filtered.orderBy(desc(events.timestamp)).limit(limit);
   }
 
-  async getEventsCount(): Promise<number> {
-    const [result] = await db!.select({ count: count() }).from(events);
+  async getEventsCount(workspaceId?: number): Promise<number> {
+    const query = db!.select({ count: count() }).from(events);
+    const filtered = workspaceId === undefined ? query : query.where(eq(events.workspaceId, workspaceId));
+    const [result] = await filtered;
     return result.count;
   }
 
   // Feedback
-  async createFeedback(fb: FeedbackInput): Promise<Feedback> {
+  async createFeedback(fb: WorkspaceScopedFeedback): Promise<Feedback> {
     const [newFeedback] = await db!.insert(feedback).values(fb).returning();
     return newFeedback;
   }
 
-  async getFeedback(): Promise<Feedback[]> {
-    return db!.select().from(feedback).orderBy(desc(feedback.timestamp));
+  async getFeedback(workspaceId?: number): Promise<Feedback[]> {
+    const query = db!.select().from(feedback);
+    const filtered = workspaceId === undefined ? query : query.where(eq(feedback.workspaceId, workspaceId));
+    return filtered.orderBy(desc(feedback.timestamp));
   }
 
-  async getFeedbackCount(): Promise<number> {
-    const [result] = await db!.select({ count: count() }).from(feedback);
+  async getFeedbackCount(workspaceId?: number): Promise<number> {
+    const query = db!.select({ count: count() }).from(feedback);
+    const filtered = workspaceId === undefined ? query : query.where(eq(feedback.workspaceId, workspaceId));
+    const [result] = await filtered;
     return result.count;
   }
 
   // Recommendations
-  async createRecommendation(rec: InsertRecommendation): Promise<Recommendation> {
+  async createRecommendation(rec: WorkspaceScopedRecommendation): Promise<Recommendation> {
     const [newRec] = await db!.insert(recommendations).values(rec).returning();
     return newRec;
   }
 
-  async getRecommendations(): Promise<Recommendation[]> {
-    return db!.select().from(recommendations).orderBy(desc(recommendations.impactScore));
+  async getRecommendations(workspaceId?: number): Promise<Recommendation[]> {
+    if (workspaceId === undefined) {
+      return db!.select().from(recommendations).orderBy(desc(recommendations.impactScore));
+    }
+
+    return db!.select().from(recommendations).where(eq(recommendations.workspaceId, workspaceId)).orderBy(desc(recommendations.impactScore));
   }
 
-  async getRecommendation(id: number): Promise<Recommendation | undefined> {
-    const [rec] = await db!.select().from(recommendations).where(eq(recommendations.id, id));
+  async getRecommendation(id: number, workspaceId?: number): Promise<Recommendation | undefined> {
+    const query = workspaceId === undefined
+      ? db!.select().from(recommendations).where(eq(recommendations.id, id))
+      : db!.select().from(recommendations).where(and(eq(recommendations.id, id), eq(recommendations.workspaceId, workspaceId)));
+    const [rec] = await query;
     return rec;
   }
 
-  async updateRecommendation(id: number, updates: Partial<InsertRecommendation>): Promise<Recommendation | undefined> {
-    const [updated] = await db!.update(recommendations).set(updates).where(eq(recommendations.id, id)).returning();
+  async updateRecommendation(id: number, updates: Partial<InsertRecommendation>, workspaceId?: number): Promise<Recommendation | undefined> {
+    const query = workspaceId === undefined
+      ? db!.update(recommendations).set(updates).where(eq(recommendations.id, id))
+      : db!.update(recommendations).set(updates).where(and(eq(recommendations.id, id), eq(recommendations.workspaceId, workspaceId)));
+    const [updated] = await query.returning();
     return updated;
   }
 
-  async deleteRecommendation(id: number): Promise<boolean> {
-    const result = await db!.delete(recommendations).where(eq(recommendations.id, id));
+  async deleteRecommendation(id: number, workspaceId?: number): Promise<boolean> {
+    const result = workspaceId === undefined
+      ? await db!.delete(recommendations).where(eq(recommendations.id, id))
+      : await db!.delete(recommendations).where(and(eq(recommendations.id, id), eq(recommendations.workspaceId, workspaceId)));
     return (result.rowCount ?? 0) > 0;
   }
 
-  async clearRecommendations(): Promise<void> {
-    await db!.delete(recommendations);
+  async clearRecommendations(workspaceId?: number): Promise<void> {
+    if (workspaceId === undefined) {
+      await db!.delete(recommendations);
+      return;
+    }
+    await db!.delete(recommendations).where(eq(recommendations.workspaceId, workspaceId));
   }
 
   // Stats
-  async getActiveUsersCount(): Promise<number> {
+  async getActiveUsersCount(workspaceId?: number): Promise<number> {
     // Count unique users in events in the last 30 days (simplified to total unique users for now)
-    const [result] = await db!
+    const query = db!
       .select({ count: count(events.userId) })
       .from(events);
+    const filtered = workspaceId === undefined ? query : query.where(eq(events.workspaceId, workspaceId));
+    const [result] = await filtered;
     return result.count;
   }
 }
 
 class MemoryStorage implements IStorage {
   private users = new Map<string, User>();
-  private eventsData: Event[] = [];
-  private feedbackData: Feedback[] = [];
-  private recommendationsData: Recommendation[] = [];
+  private eventsData: Array<Event & { workspaceId: number | null }> = [];
+  private feedbackData: Array<Feedback & { workspaceId: number | null }> = [];
+  private recommendationsData: Array<Recommendation & { workspaceId: number | null }> = [];
   private nextEventId = 1;
   private nextFeedbackId = 1;
   private nextRecommendationId = 1;
@@ -157,9 +186,10 @@ class MemoryStorage implements IStorage {
     return newUser;
   }
 
-  async createEvent(event: InsertEvent): Promise<Event> {
+  async createEvent(event: WorkspaceScopedEvent): Promise<Event> {
     const newEvent = {
       id: this.nextEventId++,
+      workspaceId: event.workspaceId,
       timestamp: new Date(),
       payload: event.payload ?? {},
       sessionId: event.sessionId ?? null,
@@ -171,17 +201,21 @@ class MemoryStorage implements IStorage {
     return newEvent;
   }
 
-  async getEvents(limit = 100): Promise<Event[]> {
-    return this.eventsData.slice(0, limit);
+  async getEvents(limit = 100, workspaceId?: number): Promise<Event[]> {
+    const items = workspaceId === undefined ? this.eventsData : this.eventsData.filter((event) => event.workspaceId === workspaceId);
+    return items.slice(0, limit);
   }
 
-  async getEventsCount(): Promise<number> {
-    return this.eventsData.length;
+  async getEventsCount(workspaceId?: number): Promise<number> {
+    return workspaceId === undefined
+      ? this.eventsData.length
+      : this.eventsData.filter((event) => event.workspaceId === workspaceId).length;
   }
 
-  async createFeedback(fb: FeedbackInput): Promise<Feedback> {
+  async createFeedback(fb: WorkspaceScopedFeedback): Promise<Feedback> {
     const newFeedback = {
       id: this.nextFeedbackId++,
+      workspaceId: fb.workspaceId,
       timestamp: new Date(),
       userId: fb.userId ?? null,
       content: fb.content,
@@ -192,17 +226,21 @@ class MemoryStorage implements IStorage {
     return newFeedback;
   }
 
-  async getFeedback(): Promise<Feedback[]> {
-    return [...this.feedbackData];
+  async getFeedback(workspaceId?: number): Promise<Feedback[]> {
+    const items = workspaceId === undefined ? this.feedbackData : this.feedbackData.filter((feedbackItem) => feedbackItem.workspaceId === workspaceId);
+    return [...items];
   }
 
-  async getFeedbackCount(): Promise<number> {
-    return this.feedbackData.length;
+  async getFeedbackCount(workspaceId?: number): Promise<number> {
+    return workspaceId === undefined
+      ? this.feedbackData.length
+      : this.feedbackData.filter((feedbackItem) => feedbackItem.workspaceId === workspaceId).length;
   }
 
-  async createRecommendation(rec: InsertRecommendation): Promise<Recommendation> {
+  async createRecommendation(rec: WorkspaceScopedRecommendation): Promise<Recommendation> {
     const newRecommendation = {
       id: this.nextRecommendationId++,
+      workspaceId: rec.workspaceId,
       createdAt: new Date(),
       status: rec.status ?? "new",
       title: rec.title,
@@ -223,17 +261,19 @@ class MemoryStorage implements IStorage {
     return newRecommendation;
   }
 
-  async getRecommendations(): Promise<Recommendation[]> {
-    return [...this.recommendationsData].sort((a, b) => b.impactScore - a.impactScore);
+  async getRecommendations(workspaceId?: number): Promise<Recommendation[]> {
+    const items = workspaceId === undefined ? this.recommendationsData : this.recommendationsData.filter((recommendation) => recommendation.workspaceId === workspaceId);
+    return [...items].sort((a, b) => b.impactScore - a.impactScore);
   }
 
-  async getRecommendation(id: number): Promise<Recommendation | undefined> {
-    return this.recommendationsData.find((r) => r.id === id);
+  async getRecommendation(id: number, workspaceId?: number): Promise<Recommendation | undefined> {
+    return this.recommendationsData.find((r) => r.id === id && (workspaceId === undefined || r.workspaceId === workspaceId));
   }
 
-  async updateRecommendation(id: number, updates: Partial<InsertRecommendation>): Promise<Recommendation | undefined> {
+  async updateRecommendation(id: number, updates: Partial<InsertRecommendation>, workspaceId?: number): Promise<Recommendation | undefined> {
     const index = this.recommendationsData.findIndex((r) => r.id === id);
     if (index === -1) return undefined;
+    if (workspaceId !== undefined && this.recommendationsData[index].workspaceId !== workspaceId) return undefined;
     
     const existing = this.recommendationsData[index];
     const updated = { ...existing, ...updates };
@@ -241,20 +281,26 @@ class MemoryStorage implements IStorage {
     return updated;
   }
 
-  async deleteRecommendation(id: number): Promise<boolean> {
+  async deleteRecommendation(id: number, workspaceId?: number): Promise<boolean> {
     const index = this.recommendationsData.findIndex((r) => r.id === id);
     if (index === -1) return false;
+    if (workspaceId !== undefined && this.recommendationsData[index].workspaceId !== workspaceId) return false;
     
     this.recommendationsData.splice(index, 1);
     return true;
   }
 
-  async clearRecommendations(): Promise<void> {
-    this.recommendationsData = [];
+  async clearRecommendations(workspaceId?: number): Promise<void> {
+    if (workspaceId === undefined) {
+      this.recommendationsData = [];
+      return;
+    }
+    this.recommendationsData = this.recommendationsData.filter((recommendation) => recommendation.workspaceId !== workspaceId);
   }
 
-  async getActiveUsersCount(): Promise<number> {
-    const userIds = new Set(this.eventsData.map((e) => e.userId).filter(Boolean));
+  async getActiveUsersCount(workspaceId?: number): Promise<number> {
+    const scopedEvents = workspaceId === undefined ? this.eventsData : this.eventsData.filter((event) => event.workspaceId === workspaceId);
+    const userIds = new Set(scopedEvents.map((e) => e.userId).filter(Boolean));
     return userIds.size;
   }
 }

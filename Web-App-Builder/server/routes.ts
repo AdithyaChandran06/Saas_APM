@@ -11,6 +11,8 @@ import { and, desc, eq } from "drizzle-orm";
 import {
   alerts as alertsTable,
   apiKeys as apiKeysTable,
+  auditLog as auditLogTable,
+  workspaceMembers,
   workspaceSettings as workspaceSettingsTable,
   workspaces,
 } from "@shared/schema-extended";
@@ -18,6 +20,7 @@ import { analyzeSentiment } from "./services/sentiment-analysis";
 import { deriveCorrelationEvidence } from "./services/correlation";
 import { scoreRecommendation } from "./services/scoring";
 import { generateRecommendationsWithRetries } from "./services/ai-recommendations";
+import { getErrorTelemetry, getPerformanceTelemetry, recordClientError } from "./telemetry";
 import type { InsertEvent, InsertFeedback, UpsertUser } from "@shared/schema";
 
 const openaiApiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
@@ -118,6 +121,86 @@ function getRecommendationQuotaState(workspaceId: string) {
   return current;
 }
 
+async function ensureLocalUser(userId: string) {
+  try {
+    await storage.createUser({
+      id: userId,
+      email: userId === profileState.id ? profileState.email : undefined,
+      firstName: userId === profileState.id ? profileState.firstName : undefined,
+      lastName: userId === profileState.id ? profileState.lastName : undefined,
+      profileImageUrl: userId === profileState.id ? profileState.profileImageUrl : undefined,
+    });
+  } catch {
+    // user already exists or auth layer owns the record
+  }
+}
+
+async function resolveWorkspaceContext(req: any) {
+  const userId = req.session?.userId ?? profileState.id;
+
+  if (!hasDatabase || !appDb || !hasExtendedDbTables) {
+    return { userId, workspaceId: 1 };
+  }
+
+  await ensureLocalUser(userId);
+
+  const [existingMembership] = await appDb
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId))
+    .orderBy(desc(workspaceMembers.joinedAt))
+    .limit(1);
+
+  if (existingMembership) {
+    return { userId, workspaceId: existingMembership.workspaceId };
+  }
+
+  const [workspace] = await appDb
+    .insert(workspaces)
+    .values({
+      name: "Default Workspace",
+      slug: `workspace-${userId.replace(/[^a-zA-Z0-9-]/g, "-")}-${Date.now()}`,
+      ownerId: userId,
+    })
+    .returning({ id: workspaces.id });
+
+  if (!workspace) {
+    return { userId, workspaceId: 1 };
+  }
+
+  await appDb.insert(workspaceMembers).values({
+    workspaceId: workspace.id,
+    userId,
+    role: "owner",
+  });
+
+  await appDb.insert(workspaceSettingsTable).values({
+    workspaceId: workspace.id,
+  });
+
+  return { userId, workspaceId: workspace.id };
+}
+
+async function writeAuditLog(entry: {
+  workspaceId: number;
+  userId?: string;
+  action: string;
+  resourceType: string;
+  resourceId?: string | number | null;
+  changes?: Record<string, unknown>;
+}) {
+  if (!hasDatabase || !appDb || !hasExtendedDbTables) return;
+
+  await appDb.insert(auditLogTable).values({
+    workspaceId: entry.workspaceId,
+    userId: entry.userId ?? null,
+    action: entry.action,
+    resourceType: entry.resourceType,
+    resourceId: entry.resourceId == null ? null : String(entry.resourceId),
+    changes: entry.changes ?? null,
+  });
+}
+
 async function getWorkspaceId() {
   if (!hasDatabase || !appDb || !hasExtendedDbTables) return null;
 
@@ -189,7 +272,16 @@ export async function registerRoutes(
   app.post(api.events.create.path, async (req, res) => {
     try {
       const input = api.events.create.input.parse(req.body);
-      const event = await storage.createEvent(input);
+      const { workspaceId, userId } = await resolveWorkspaceContext(req);
+      const event = await storage.createEvent({ ...input, workspaceId });
+      await writeAuditLog({
+        workspaceId,
+        userId,
+        action: "event.created",
+        resourceType: "event",
+        resourceId: event.id,
+        changes: { type: event.type, url: event.url, sessionId: event.sessionId },
+      });
       res.status(201).json(event);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -203,16 +295,18 @@ export async function registerRoutes(
   });
 
   app.get(api.events.list.path, async (req, res) => {
-    const events = await storage.getEvents();
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const events = await storage.getEvents(undefined, workspaceId);
     res.json(events);
   });
 
   app.get(api.events.query.path, async (req, res) => {
     try {
       const query = api.events.query.query.parse(req.query);
+      const { workspaceId } = await resolveWorkspaceContext(req);
       const from = parseDate(query.from);
       const to = parseDate(query.to);
-      const allEvents = await storage.getEvents(5000);
+      const allEvents = await storage.getEvents(5000, workspaceId);
       const filtered = allEvents.filter((event) => {
         if (query.type && event.type !== query.type) return false;
         if (query.userId && event.userId !== query.userId) return false;
@@ -249,13 +343,25 @@ export async function registerRoutes(
         })
         .parse(req.body);
 
+      const { workspaceId, userId } = await resolveWorkspaceContext(req);
+
       for (const event of payload.events) {
-        await storage.createEvent({
+        const created = await storage.createEvent({
           type: event.type,
           payload: event.payload ?? {},
           userId: event.userId,
           sessionId: event.sessionId,
           url: event.url,
+          workspaceId,
+        });
+
+        await writeAuditLog({
+          workspaceId,
+          userId,
+          action: "event.created",
+          resourceType: "event",
+          resourceId: created.id,
+          changes: { type: created.type, url: created.url, sessionId: created.sessionId },
         });
       }
 
@@ -275,8 +381,17 @@ export async function registerRoutes(
   app.post(api.feedback.create.path, async (req, res) => {
     try {
       const input = api.feedback.create.input.parse(req.body);
+      const { workspaceId, userId } = await resolveWorkspaceContext(req);
       const sentiment = analyzeSentiment(input.content).sentiment;
-      const fb = await storage.createFeedback({ ...input, sentiment });
+      const fb = await storage.createFeedback({ ...input, sentiment, workspaceId });
+      await writeAuditLog({
+        workspaceId,
+        userId,
+        action: "feedback.created",
+        resourceType: "feedback",
+        resourceId: fb.id,
+        changes: { source: fb.source, sentiment: fb.sentiment },
+      });
       res.status(201).json(fb);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -290,16 +405,18 @@ export async function registerRoutes(
   });
 
   app.get(api.feedback.list.path, async (req, res) => {
-    const feedback = await storage.getFeedback();
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const feedback = await storage.getFeedback(workspaceId);
     res.json(feedback);
   });
 
   app.get(api.feedback.query.path, async (req, res) => {
     try {
       const query = api.feedback.query.query.parse(req.query);
+      const { workspaceId } = await resolveWorkspaceContext(req);
       const from = parseDate(query.from);
       const to = parseDate(query.to);
-      const allFeedback = await storage.getFeedback();
+      const allFeedback = await storage.getFeedback(workspaceId);
       const filtered = allFeedback.filter((item) => {
         if (query.sentiment && item.sentiment !== query.sentiment) return false;
         if (query.source && item.source !== query.source) return false;
@@ -325,7 +442,16 @@ export async function registerRoutes(
   app.post(api.recommendations.create.path, async (req, res) => {
     try {
       const input = api.recommendations.create.input.parse(req.body);
-      const rec = await storage.createRecommendation(input);
+      const { workspaceId, userId } = await resolveWorkspaceContext(req);
+      const rec = await storage.createRecommendation({ ...input, workspaceId });
+      await writeAuditLog({
+        workspaceId,
+        userId,
+        action: "recommendation.created",
+        resourceType: "recommendation",
+        resourceId: rec.id,
+        changes: { category: rec.category, status: rec.status, impactScore: rec.impactScore },
+      });
       res.status(201).json(rec);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -339,7 +465,8 @@ export async function registerRoutes(
   });
 
   app.get(api.recommendations.list.path, async (req, res) => {
-    const recs = await storage.getRecommendations();
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const recs = await storage.getRecommendations(workspaceId);
     res.json(recs);
   });
 
@@ -348,7 +475,8 @@ export async function registerRoutes(
     if (Number.isNaN(id)) {
       return res.status(400).json({ message: "Invalid recommendation id" });
     }
-    const rec = await storage.getRecommendation(id);
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const rec = await storage.getRecommendation(id, workspaceId);
     if (!rec) {
       return res.status(404).json({ message: "Recommendation not found" });
     }
@@ -362,10 +490,19 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invalid recommendation id" });
       }
       const input = api.recommendations.update.input.parse(req.body);
-      const rec = await storage.updateRecommendation(id, input);
+      const { workspaceId, userId } = await resolveWorkspaceContext(req);
+      const rec = await storage.updateRecommendation(id, input, workspaceId);
       if (!rec) {
         return res.status(404).json({ message: "Recommendation not found" });
       }
+      await writeAuditLog({
+        workspaceId,
+        userId,
+        action: "recommendation.updated",
+        resourceType: "recommendation",
+        resourceId: rec.id,
+        changes: input as Record<string, unknown>,
+      });
       res.json(rec);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -383,17 +520,26 @@ export async function registerRoutes(
     if (Number.isNaN(id)) {
       return res.status(400).json({ message: "Invalid recommendation id" });
     }
-    const deleted = await storage.deleteRecommendation(id);
+    const { workspaceId, userId } = await resolveWorkspaceContext(req);
+    const deleted = await storage.deleteRecommendation(id, workspaceId);
     if (!deleted) {
       return res.status(404).json({ message: "Recommendation not found" });
     }
+    await writeAuditLog({
+      workspaceId,
+      userId,
+      action: "recommendation.deleted",
+      resourceType: "recommendation",
+      resourceId: id,
+    });
     res.status(204).send();
   });
 
   app.get(api.recommendations.query.path, async (req, res) => {
     try {
       const query = api.recommendations.query.query.parse(req.query);
-      const all = await storage.getRecommendations();
+      const { workspaceId } = await resolveWorkspaceContext(req);
+      const all = await storage.getRecommendations(workspaceId);
       const filtered = all.filter((rec) => {
         if (query.category && rec.category !== query.category) return false;
         if (query.status && rec.status !== query.status) return false;
@@ -415,23 +561,28 @@ export async function registerRoutes(
 
   app.post(api.recommendations.generate.path, async (req, res) => {
     try {
-      const workspaceId = String((await getWorkspaceId()) ?? "local-workspace");
-      const quotaState = getRecommendationQuotaState(workspaceId);
+      const { workspaceId, userId } = await resolveWorkspaceContext(req);
+      const workspaceSettings = appDb
+        ? await appDb.select().from(workspaceSettingsTable).where(eq(workspaceSettingsTable.workspaceId, workspaceId)).limit(1)
+        : [];
+      const settingsRow = workspaceSettings[0];
+      const dayKey = utcDayKey();
+      const quotaCount = settingsRow?.recommendationGenerateDayKey === dayKey ? (settingsRow.recommendationGenerateCount ?? 0) : 0;
 
-      if (quotaState.count >= DAILY_RECOMMENDATION_GENERATE_LIMIT) {
+      if (quotaCount >= DAILY_RECOMMENDATION_GENERATE_LIMIT) {
         return res.status(429).json({
           message: "Daily recommendation generation limit reached for this workspace.",
         });
       }
 
-      const events = await storage.getEvents(50);
-      const feedback = await storage.getFeedback();
+      const events = await storage.getEvents(50, workspaceId);
+      const feedback = await storage.getFeedback(workspaceId);
       const stats = {
-        totalEvents: await storage.getEventsCount(),
-        totalFeedback: await storage.getFeedbackCount(),
+        totalEvents: await storage.getEventsCount(workspaceId),
+        totalFeedback: await storage.getFeedbackCount(workspaceId),
       };
 
-      await storage.clearRecommendations();
+      await storage.clearRecommendations(workspaceId);
 
       const generated = openai
         ? await generateRecommendationsWithRetries(openai, { events, feedback, stats })
@@ -486,10 +637,40 @@ export async function registerRoutes(
           modelUsed: generated.modelUsed,
           inputSnapshotHash: generated.inputSnapshotHash,
           status: "new",
+          workspaceId,
         });
       }
 
-      quotaState.count += 1;
+      if (appDb) {
+        const nextCount = quotaCount + 1;
+        if (settingsRow) {
+          await appDb
+            .update(workspaceSettingsTable)
+            .set({
+              recommendationGenerateCount: nextCount,
+              recommendationGenerateDayKey: dayKey,
+              updatedAt: new Date(),
+            })
+            .where(eq(workspaceSettingsTable.workspaceId, workspaceId));
+        } else {
+          await appDb.insert(workspaceSettingsTable).values({
+            workspaceId,
+            recommendationGenerateCount: nextCount,
+            recommendationGenerateDayKey: dayKey,
+          });
+        }
+      } else {
+        const quotaState = getRecommendationQuotaState(String(workspaceId));
+        quotaState.count += 1;
+      }
+
+      await writeAuditLog({
+        workspaceId,
+        userId,
+        action: "recommendations.generated",
+        resourceType: "recommendation",
+        changes: { generatedCount: generated.recommendations.length, modelUsed: generated.modelUsed },
+      });
 
       res.json({ message: "Recommendations generated" });
     } catch (error) {
@@ -504,7 +685,8 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Invalid recommendation id" });
     }
 
-    const rec = await storage.getRecommendation(id);
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const rec = await storage.getRecommendation(id, workspaceId);
     if (!rec) {
       return res.status(404).json({ message: "Recommendation not found" });
     }
@@ -535,8 +717,9 @@ export async function registerRoutes(
     };
 
     const threshold = windowMs[query.window] ? Date.now() - windowMs[query.window]! : null;
-    const allEvents = await storage.getEvents(5000);
-    const allFeedback = await storage.getFeedback();
+  const { workspaceId } = await resolveWorkspaceContext(req);
+  const allEvents = await storage.getEvents(5000, workspaceId);
+  const allFeedback = await storage.getFeedback(workspaceId);
 
     const eventsInWindow = threshold
       ? allEvents.filter((e) => e.timestamp && new Date(e.timestamp).getTime() >= threshold)
@@ -559,8 +742,8 @@ export async function registerRoutes(
   });
 
   // Settings + profile
-  app.get("/api/settings", async (_req, res) => {
-    const workspaceId = await getWorkspaceId();
+  app.get("/api/settings", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
     if (workspaceId && appDb) {
       try {
         const [existing] = await appDb
@@ -608,7 +791,7 @@ export async function registerRoutes(
         sampleRate: input.sampleRate ?? settingsState.sampleRate,
       };
 
-      const workspaceId = await getWorkspaceId();
+      const { workspaceId, userId } = await resolveWorkspaceContext(req);
       if (workspaceId && appDb) {
         const [existing] = await appDb
           .select({ id: workspaceSettingsTable.id })
@@ -630,7 +813,7 @@ export async function registerRoutes(
             .where(eq(workspaceSettingsTable.id, existing.id))
             .returning();
 
-          return res.json({
+          const result = {
             id: updated.id,
             workspaceId,
             dataCollectionEnabled: updated.dataCollectionEnabled ?? true,
@@ -638,7 +821,18 @@ export async function registerRoutes(
             retentionDays: updated.retentionDays ?? 90,
             privacyMode: updated.privacyMode ?? false,
             sampleRate: updated.sampleRate ?? 1,
+          };
+
+          await writeAuditLog({
+            workspaceId,
+            userId,
+            action: "workspace.settings.updated",
+            resourceType: "workspace_settings",
+            resourceId: updated.id,
+            changes: input as Record<string, unknown>,
           });
+
+          return res.json(result);
         }
 
         const [created] = await appDb
@@ -653,7 +847,7 @@ export async function registerRoutes(
           })
           .returning();
 
-        return res.json({
+        const result = {
           id: created.id,
           workspaceId,
           dataCollectionEnabled: created.dataCollectionEnabled ?? true,
@@ -661,7 +855,18 @@ export async function registerRoutes(
           retentionDays: created.retentionDays ?? 90,
           privacyMode: created.privacyMode ?? false,
           sampleRate: created.sampleRate ?? 1,
+        };
+
+        await writeAuditLog({
+          workspaceId,
+          userId,
+          action: "workspace.settings.created",
+          resourceType: "workspace_settings",
+          resourceId: created.id,
+          changes: input as Record<string, unknown>,
         });
+
+        return res.json(result);
       }
 
       return res.json({ id: 1, workspaceId: 1, ...settingsState });
@@ -708,8 +913,8 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/api-keys", async (_req, res) => {
-    const workspaceId = await getWorkspaceId();
+  app.get("/api/api-keys", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
     if (workspaceId && appDb) {
       try {
         const keys = await appDb
@@ -752,7 +957,7 @@ export async function registerRoutes(
         lastUsed: null,
       };
 
-      const workspaceId = await getWorkspaceId();
+      const { workspaceId } = await resolveWorkspaceContext(req);
       if (workspaceId && appDb) {
         const [created] = await appDb
           .insert(apiKeysTable)
@@ -789,7 +994,7 @@ export async function registerRoutes(
 
   app.delete("/api/api-keys/:id", async (req, res) => {
     const id = parseNumericParam(req.params.id);
-    const workspaceId = await getWorkspaceId();
+    const { workspaceId } = await resolveWorkspaceContext(req);
 
     if (workspaceId && appDb && !Number.isNaN(id)) {
       try {
@@ -808,8 +1013,8 @@ export async function registerRoutes(
   });
 
   // Alerts
-  app.get("/api/alerts", async (_req, res) => {
-    const workspaceId = await getWorkspaceId();
+  app.get("/api/alerts", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
     if (workspaceId && appDb) {
       try {
         const dbAlerts = await appDb
@@ -864,7 +1069,7 @@ export async function registerRoutes(
         createdAt: new Date().toISOString(),
       };
 
-      const workspaceId = await getWorkspaceId();
+      const { workspaceId } = await resolveWorkspaceContext(req);
       if (workspaceId && appDb) {
         const [created] = await appDb
           .insert(alertsTable)
@@ -918,7 +1123,7 @@ export async function registerRoutes(
 
       const existing = alertsState.find((a) => a.id === req.params.id);
       const alertId = parseNumericParam(req.params.id);
-      const workspaceId = await getWorkspaceId();
+      const { workspaceId } = await resolveWorkspaceContext(req);
       if (workspaceId && appDb && !Number.isNaN(alertId)) {
         const [updatedDbAlert] = await appDb
           .update(alertsTable)
@@ -966,7 +1171,7 @@ export async function registerRoutes(
 
   app.delete("/api/alerts/:id", async (req, res) => {
     const alertId = parseNumericParam(req.params.id);
-    const workspaceId = await getWorkspaceId();
+    const { workspaceId } = await resolveWorkspaceContext(req);
     if (workspaceId && appDb && !Number.isNaN(alertId)) {
       await appDb.delete(alertsTable).where(and(eq(alertsTable.id, alertId), eq(alertsTable.workspaceId, workspaceId)));
       return res.status(204).send();
@@ -978,7 +1183,7 @@ export async function registerRoutes(
 
   app.post("/api/alerts/:id/acknowledge", async (req, res) => {
     const alertId = parseNumericParam(req.params.id);
-    const workspaceId = await getWorkspaceId();
+    const { workspaceId } = await resolveWorkspaceContext(req);
     if (workspaceId && appDb && !Number.isNaN(alertId)) {
       const [updatedDbAlert] = await appDb
         .update(alertsTable)
@@ -1013,8 +1218,9 @@ export async function registerRoutes(
   });
 
   // Analytics
-  app.get("/api/analytics/retention", async (_req, res) => {
-    const allEvents = await storage.getEvents(5000);
+  app.get("/api/analytics/retention", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const allEvents = await storage.getEvents(5000, workspaceId);
     const dated = allEvents
       .filter((e) => e.userId && e.timestamp)
       .map((e) => ({
@@ -1055,8 +1261,9 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/analytics/growth", async (_req, res) => {
-    const allEvents = await storage.getEvents(5000);
+  app.get("/api/analytics/growth", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const allEvents = await storage.getEvents(5000, workspaceId);
     const now = Date.now();
     const currentWindowStart = now - 30 * 86400000;
     const previousWindowStart = now - 60 * 86400000;
@@ -1091,8 +1298,9 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/analytics/funnels", async (_req, res) => {
-    const allEvents = await storage.getEvents(5000);
+  app.get("/api/analytics/funnels", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const allEvents = await storage.getEvents(5000, workspaceId);
     const byType = (type: string) => allEvents.filter((e) => e.type === type).length;
     const landing = byType("page_view");
     const signup = byType("signup");
@@ -1107,8 +1315,9 @@ export async function registerRoutes(
     ]);
   });
 
-  app.get("/api/analytics/segments", async (_req, res) => {
-    const allEvents = await storage.getEvents(5000);
+  app.get("/api/analytics/segments", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const allEvents = await storage.getEvents(5000, workspaceId);
     const byUser = new Map<string, number>();
     for (const evt of allEvents) {
       if (!evt.userId) continue;
@@ -1132,8 +1341,9 @@ export async function registerRoutes(
     ]);
   });
 
-  app.get("/api/analytics/cohorts", async (_req, res) => {
-    const allEvents = await storage.getEvents(5000);
+  app.get("/api/analytics/cohorts", async (req, res) => {
+    const { workspaceId } = await resolveWorkspaceContext(req);
+    const allEvents = await storage.getEvents(5000, workspaceId);
     const userEvents = allEvents
       .filter((e) => e.userId && e.timestamp)
       .map((e) => ({ userId: e.userId as string, ts: new Date(e.timestamp as Date) }));
@@ -1187,6 +1397,37 @@ export async function registerRoutes(
     res.json([]);
   });
 
+  app.post("/api/errors", async (req, res) => {
+    const payload = z
+      .object({
+        message: z.string().min(1),
+        stack: z.string().optional(),
+        path: z.string().optional(),
+        context: z.record(z.unknown()).optional(),
+      })
+      .parse(req.body);
+
+    recordClientError({
+      message: payload.message,
+      stack: payload.stack,
+      path: payload.path,
+      context: payload.context,
+    });
+
+    res.status(202).json({ message: "Error captured" });
+  });
+
+  app.get("/api/errors", async (_req, res) => {
+    res.json(getErrorTelemetry());
+  });
+
+  app.get("/api/performance", async (_req, res) => {
+    res.json({
+      routes: getPerformanceTelemetry(),
+      summary: getErrorTelemetry(),
+    });
+  });
+
   // Initial seeding
   await seedDatabase();
 
@@ -1195,7 +1436,8 @@ export async function registerRoutes(
 
 // Seed function
 async function seedDatabase() {
-  const count = await storage.getEventsCount();
+  const { workspaceId } = await resolveWorkspaceContext({ session: {} });
+  const count = await storage.getEventsCount(workspaceId);
   if (count === 0) {
     console.log("Seeding database...");
     
@@ -1215,12 +1457,12 @@ async function seedDatabase() {
       { type: "page_view", url: "/dashboard", userId: "user_2" },
       { type: "feature_used", payload: { feature: "export" }, userId: "user_2" },
     ];
-    for (const e of sampleEvents) await storage.createEvent(e);
+    for (const e of sampleEvents) await storage.createEvent({ ...e, workspaceId });
 
     const sampleFeedback: Array<InsertFeedback & { sentiment?: "positive" | "negative" | "neutral" }> = [
       { userId: "user_2", content: "I love the new export feature!", source: "web", sentiment: "positive" },
       { userId: "user_1", content: "Pricing page is confusing.", source: "email", sentiment: "negative" },
     ];
-    for (const f of sampleFeedback) await storage.createFeedback(f);
+    for (const f of sampleFeedback) await storage.createFeedback({ ...f, workspaceId });
   }
 }

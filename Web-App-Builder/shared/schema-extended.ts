@@ -61,6 +61,8 @@ export const workspaceSettings = pgTable(
     retentionDays: integer("retention_days").default(90),
     privacyMode: boolean("privacy_mode").default(false),
     sampleRate: doublePrecision("sample_rate").default(1.0), // 0.0 to 1.0
+    recommendationGenerateCount: integer("recommendation_generate_count").default(0),
+    recommendationGenerateDayKey: text("recommendation_generate_day_key"),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   }

@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { validateRuntimeEnv } from "./env";
+import { recordApiRequest } from "./telemetry";
 
 const app = express();
 const httpServer = createServer(app);
@@ -49,6 +50,13 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
+      recordApiRequest({
+        method: req.method,
+        path,
+        statusCode: res.statusCode,
+        durationMs: duration,
+      });
+
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;

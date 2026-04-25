@@ -14,6 +14,7 @@ import { relations } from "drizzle-orm";
 
 export const events = pgTable("events", {
   id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id"),
   type: text("type").notNull(), // e.g., 'page_view', 'click', 'feature_used'
   payload: jsonb("payload").default({}),
   userId: text("user_id"), // Optional: user might be anonymous initially
@@ -24,6 +25,7 @@ export const events = pgTable("events", {
 
 export const feedback = pgTable("feedback", {
   id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id"),
   userId: text("user_id").references(() => users.id),
   content: text("content").notNull(),
   sentiment: text("sentiment"), // 'positive', 'neutral', 'negative'
@@ -33,6 +35,7 @@ export const feedback = pgTable("feedback", {
 
 export const recommendations = pgTable("recommendations", {
   id: serial("id").primaryKey(),
+  workspaceId: integer("workspace_id"),
   title: text("title").notNull(),
   description: text("description").notNull(),
   category: text("category").notNull(), // 'revenue', 'retention', 'ux'
@@ -68,9 +71,9 @@ export const feedbackRelations = relations(feedback, ({ one }) => ({
 
 // === BASE SCHEMAS ===
 
-export const insertEventSchema = createInsertSchema(events).omit({ id: true, timestamp: true });
-export const insertFeedbackSchema = createInsertSchema(feedback).omit({ id: true, timestamp: true, sentiment: true }); // Sentiment computed by AI
-export const insertRecommendationSchema = createInsertSchema(recommendations).omit({ id: true, createdAt: true });
+export const insertEventSchema = createInsertSchema(events).omit({ id: true, timestamp: true, workspaceId: true });
+export const insertFeedbackSchema = createInsertSchema(feedback).omit({ id: true, timestamp: true, sentiment: true, workspaceId: true }); // Sentiment computed by AI
+export const insertRecommendationSchema = createInsertSchema(recommendations).omit({ id: true, createdAt: true, workspaceId: true });
 
 // === EXPLICIT API CONTRACT TYPES ===
 
