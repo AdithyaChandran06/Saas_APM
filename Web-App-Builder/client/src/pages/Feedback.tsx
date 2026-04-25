@@ -1,10 +1,19 @@
-import { useFeedback } from "@/hooks/use-pm-data";
+import { useState } from "react";
+import { useFeedbackQuery } from "@/hooks/use-pm-data";
 import { format } from "date-fns";
 import { MessageSquare, ThumbsUp, ThumbsDown, Minus } from "lucide-react";
 import { DataSimulator } from "@/components/DataSimulator";
 
 export default function Feedback() {
-  const { data: feedbackList, isLoading } = useFeedback();
+  const [searchText, setSearchText] = useState("");
+  const [sentimentFilter, setSentimentFilter] = useState("");
+
+  const { data: feedbackResponse, isLoading } = useFeedbackQuery({
+    query: searchText || undefined,
+    sentiment: sentimentFilter ? (sentimentFilter as "positive" | "neutral" | "negative") : undefined,
+  });
+
+  const feedbackList = feedbackResponse?.items ?? [];
 
   const getSentimentIcon = (sentiment: string | null) => {
     switch (sentiment) {
@@ -19,6 +28,29 @@ export default function Feedback() {
       <div>
         <h1 className="text-3xl md:text-4xl text-foreground">User Feedback</h1>
         <p className="text-muted-foreground mt-1">Direct feedback from users, analyzed by AI.</p>
+      </div>
+
+      <div className="glass-card rounded-2xl border border-border p-4 flex flex-col md:flex-row gap-4 md:items-center">
+        <div className="relative flex-1 max-w-md">
+          <MessageSquare className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="text"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Search feedback text..."
+            className="w-full pl-10 pr-4 py-2 rounded-xl bg-background border border-border/50 focus:ring-2 focus:ring-primary/20 text-sm"
+          />
+        </div>
+        <select
+          value={sentimentFilter}
+          onChange={(e) => setSentimentFilter(e.target.value)}
+          className="px-4 py-2 rounded-xl bg-background border border-border/50 text-sm"
+        >
+          <option value="">All sentiments</option>
+          <option value="positive">Positive</option>
+          <option value="neutral">Neutral</option>
+          <option value="negative">Negative</option>
+        </select>
       </div>
 
       <div className="grid grid-cols-1 gap-4">
@@ -69,7 +101,7 @@ export default function Feedback() {
         )}
       </div>
 
-      {!isLoading && feedbackList?.length === 0 && (
+      {!isLoading && feedbackList.length === 0 && (
         <div className="text-center py-20 bg-card rounded-2xl border border-border border-dashed">
           <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
           <h3 className="text-lg font-medium text-foreground">No Feedback Yet</h3>

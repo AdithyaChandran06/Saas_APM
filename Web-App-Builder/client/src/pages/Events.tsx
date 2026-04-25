@@ -1,10 +1,19 @@
-import { useEvents } from "@/hooks/use-pm-data";
+import { useState } from "react";
+import { useEventsQuery } from "@/hooks/use-pm-data";
 import { format } from "date-fns";
 import { Search, Filter, ArrowUpDown } from "lucide-react";
 import { DataSimulator } from "@/components/DataSimulator";
 
 export default function Events() {
-  const { data: events, isLoading } = useEvents();
+  const [searchText, setSearchText] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+
+  const { data: eventsResponse, isLoading } = useEventsQuery({
+    type: typeFilter || undefined,
+    urlContains: searchText || undefined,
+  });
+
+  const events = eventsResponse?.items ?? [];
 
   return (
     <div className="space-y-8 animate-in">
@@ -20,12 +29,24 @@ export default function Events() {
         <div className="p-4 border-b border-border bg-secondary/30 flex gap-4">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <input 
-              type="text" 
-              placeholder="Search events..." 
+            <input
+              type="text"
+              placeholder="Search event URLs..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
               className="w-full pl-10 pr-4 py-2 rounded-xl bg-background border-none focus:ring-2 focus:ring-primary/20 text-sm"
             />
           </div>
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="px-4 py-2 rounded-xl bg-background border border-border/50 text-sm"
+          >
+            <option value="">All types</option>
+            <option value="page_view">Page view</option>
+            <option value="click">Click</option>
+            <option value="error">Error</option>
+          </select>
           <button className="flex items-center gap-2 px-4 py-2 rounded-xl bg-background hover:bg-secondary transition-colors text-sm font-medium border border-border/50">
             <Filter className="h-4 w-4 text-muted-foreground" />
             Filter
@@ -57,7 +78,7 @@ export default function Events() {
                   </tr>
                 ))
               ) : (
-                events?.map((event) => (
+                events.map((event) => (
                   <tr key={event.id} className="hover:bg-secondary/20 transition-colors">
                     <td className="px-6 py-4">
                       <span className={`
@@ -89,7 +110,7 @@ export default function Events() {
           </table>
         </div>
         
-        {!isLoading && events?.length === 0 && (
+        {!isLoading && events.length === 0 && (
           <div className="p-12 text-center text-muted-foreground">
             No events logged yet. Use the simulator to generate data.
           </div>
