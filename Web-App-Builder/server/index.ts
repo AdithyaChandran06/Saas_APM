@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import { workspaceRouter } from "./workspace";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { validateRuntimeEnv } from "./env";
@@ -71,6 +72,7 @@ app.use((req, res, next) => {
 
 (async () => {
   validateRuntimeEnv();
+  app.use("/api/workspaces", workspaceRouter);
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
