@@ -135,14 +135,30 @@ async function ensureLocalUser(userId: string) {
   }
 }
 
-async function resolveWorkspaceContext(req: any) {
+async function resolveWorkspaceContext(req: any, requestedWorkspaceId?: number) {
   const userId = req.session?.userId ?? profileState.id;
 
   if (!hasDatabase || !appDb || !hasExtendedDbTables) {
-    return { userId, workspaceId: 1 };
+    return { userId, workspaceId: requestedWorkspaceId ?? 1 };
   }
 
   await ensureLocalUser(userId);
+
+  if (requestedWorkspaceId !== undefined) {
+    const [membership] = await appDb
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(and(eq(workspaceMembers.userId, userId), eq(workspaceMembers.workspaceId, requestedWorkspaceId)))
+      .limit(1);
+
+    if (!membership) {
+      const error = new Error("Not authorized for this workspace") as Error & { status?: number };
+      error.status = 403;
+      throw error;
+    }
+
+    return { userId, workspaceId: membership.workspaceId };
+  }
 
   const [existingMembership] = await appDb
     .select({ workspaceId: workspaceMembers.workspaceId })
@@ -295,15 +311,18 @@ export async function registerRoutes(
   });
 
   app.get(api.events.list.path, async (req, res) => {
-    const { workspaceId } = await resolveWorkspaceContext(req);
-    const events = await storage.getEvents(undefined, workspaceId);
+    const workspaceId = api.events.query.query.shape.workspaceId?.safeParse(req.query.workspaceId)?.success
+      ? api.events.query.query.shape.workspaceId.parse(req.query.workspaceId)
+      : undefined;
+    const { workspaceId: resolvedWorkspaceId } = await resolveWorkspaceContext(req, workspaceId);
+    const events = await storage.getEvents(undefined, resolvedWorkspaceId);
     res.json(events);
   });
 
   app.get(api.events.query.path, async (req, res) => {
     try {
       const query = api.events.query.query.parse(req.query);
-      const { workspaceId } = await resolveWorkspaceContext(req);
+      const { workspaceId } = await resolveWorkspaceContext(req, query.workspaceId);
       const from = parseDate(query.from);
       const to = parseDate(query.to);
       const allEvents = await storage.getEvents(5000, workspaceId);
@@ -405,15 +424,18 @@ export async function registerRoutes(
   });
 
   app.get(api.feedback.list.path, async (req, res) => {
-    const { workspaceId } = await resolveWorkspaceContext(req);
-    const feedback = await storage.getFeedback(workspaceId);
+    const workspaceId = api.feedback.query.query.shape.workspaceId?.safeParse(req.query.workspaceId)?.success
+      ? api.feedback.query.query.shape.workspaceId.parse(req.query.workspaceId)
+      : undefined;
+    const { workspaceId: resolvedWorkspaceId } = await resolveWorkspaceContext(req, workspaceId);
+    const feedback = await storage.getFeedback(resolvedWorkspaceId);
     res.json(feedback);
   });
 
   app.get(api.feedback.query.path, async (req, res) => {
     try {
       const query = api.feedback.query.query.parse(req.query);
-      const { workspaceId } = await resolveWorkspaceContext(req);
+      const { workspaceId } = await resolveWorkspaceContext(req, query.workspaceId);
       const from = parseDate(query.from);
       const to = parseDate(query.to);
       const allFeedback = await storage.getFeedback(workspaceId);
@@ -1418,13 +1440,13 @@ export async function registerRoutes(
   });
 
   app.get("/api/errors", async (_req, res) => {
-    res.json(getErrorTelemetry());
+    res.json(await getErrorTelemetry());
   });
 
   app.get("/api/performance", async (_req, res) => {
     res.json({
-      routes: getPerformanceTelemetry(),
-      summary: getErrorTelemetry(),
+      routes: await getPerformanceTelemetry(),
+      summary: await getErrorTelemetry(),
     });
   });
 

@@ -15,6 +15,7 @@ export const eventQuerySchema = paginationSchema.extend({
   type: z.string().optional(),
   userId: z.string().optional(),
   urlContains: z.string().optional(),
+  workspaceId: z.coerce.number().int().positive().optional(),
 }).merge(dateRangeSchema);
 
 export const feedbackQuerySchema = paginationSchema.extend({
@@ -22,6 +23,7 @@ export const feedbackQuerySchema = paginationSchema.extend({
   source: z.string().optional(),
   userId: z.string().optional(),
   query: z.string().optional(),
+  workspaceId: z.coerce.number().int().positive().optional(),
 }).merge(dateRangeSchema);
 
 const paginatedMetaSchema = z.object({

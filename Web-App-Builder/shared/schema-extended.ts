@@ -191,6 +191,27 @@ export const auditLog = pgTable("audit_log", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// === TELEMETRY ===
+export const errorEvents = pgTable("error_events", {
+  id: serial("id").primaryKey(),
+  timestamp: timestamp("timestamp").defaultNow(),
+  method: text("method").notNull(),
+  path: text("path").notNull(),
+  statusCode: integer("status_code").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  message: text("message"),
+  context: jsonb("context"),
+});
+
+export const performanceMetrics = pgTable("performance_metrics", {
+  id: serial("id").primaryKey(),
+  timestamp: timestamp("timestamp").defaultNow(),
+  method: text("method").notNull(),
+  path: text("path").notNull(),
+  statusCode: integer("status_code").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+});
+
 // === RELATIONS ===
 export const workspaceRelations = relations(workspaces, ({ one, many }) => ({
   owner: one(users, {
@@ -310,3 +331,5 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 
 export type AuditLogEntry = typeof auditLog.$inferSelect;
+export type ErrorEvent = typeof errorEvents.$inferSelect;
+export type PerformanceMetric = typeof performanceMetrics.$inferSelect;

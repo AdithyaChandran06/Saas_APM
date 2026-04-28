@@ -14,6 +14,10 @@ type PathTelemetry = {
   durationsMs: number[];
 };
 
+import { desc, count, sql } from "drizzle-orm";
+import { db, hasDatabase } from "./db";
+import { errorEvents, performanceMetrics } from "@shared/schema-extended";
+
 const pathTelemetry = new Map<string, PathTelemetry>();
 const recentErrors: ErrorSample[] = [];
 const MAX_DURATION_SAMPLES = 1000;
@@ -70,6 +74,28 @@ export function recordApiRequest(input: {
   if (entry.durationsMs.length > MAX_DURATION_SAMPLES) {
     entry.durationsMs.shift();
   }
+
+  if (hasDatabase && db) {
+    void db.insert(performanceMetrics).values({
+      method: input.method,
+      path: input.path,
+      statusCode: input.statusCode,
+      durationMs: Math.round(input.durationMs),
+    }).catch((err) => {
+      console.warn("Failed to persist performance metric", err);
+    });
+
+    if (input.statusCode >= 500) {
+      void db.insert(errorEvents).values({
+        method: input.method,
+        path: input.path,
+        statusCode: input.statusCode,
+        durationMs: Math.round(input.durationMs),
+      }).catch((err) => {
+        console.warn("Failed to persist error event", err);
+      });
+    }
+  }
 }
 
 export function recordClientError(input: {
@@ -94,9 +120,53 @@ export function recordClientError(input: {
   if (recentErrors.length > MAX_ERROR_SAMPLES) {
     recentErrors.splice(MAX_ERROR_SAMPLES);
   }
+
+  if (hasDatabase && db) {
+    void db.insert(errorEvents).values({
+      method: "CLIENT",
+      path: input.path ?? "client",
+      statusCode: 0,
+      durationMs: 0,
+      message: input.message,
+      context: {
+        ...(input.context ?? {}),
+        stack: input.stack,
+      },
+    }).catch((err) => {
+      console.warn("Failed to persist client error", err);
+    });
+  }
 }
 
-export function getErrorTelemetry() {
+async function getErrorTelemetryFromDatabase() {
+  const [{ count: totalRequests }] = await db!.select({ count: count() }).from(performanceMetrics);
+  const [{ count: totalErrors }] = await db!
+    .select({ count: count() })
+    .from(performanceMetrics)
+    .where(sql`${performanceMetrics.statusCode} >= 500`);
+  const recent = await db!
+    .select()
+    .from(errorEvents)
+    .orderBy(desc(errorEvents.timestamp))
+    .limit(MAX_ERROR_SAMPLES);
+
+  return {
+    totalRequests,
+    totalErrors,
+    errorRatePercent: totalRequests === 0 ? 0 : Number(((totalErrors / totalRequests) * 100).toFixed(2)),
+    recentErrors: recent,
+  };
+}
+
+export async function getErrorTelemetry() {
+  if (hasDatabase && db) {
+    try {
+      return await getErrorTelemetryFromDatabase();
+    } catch (err) {
+      console.warn("Falling back to in-memory error telemetry", err);
+    }
+  }
+
   const totals = Array.from(pathTelemetry.values()).reduce(
     (acc, item) => {
       acc.total += item.totalCount;
@@ -114,22 +184,67 @@ export function getErrorTelemetry() {
   };
 }
 
-export function getPerformanceTelemetry() {
-  const rows = Array.from(pathTelemetry.entries()).map(([pathKey, item]) => {
-    const p50 = percentile(item.durationsMs, 50);
-    const p95 = percentile(item.durationsMs, 95);
-    const p99 = percentile(item.durationsMs, 99);
+function aggregatePerformanceTelemetry(rows: Array<{ method: string; path: string; statusCode: number; durationMs: number }>) {
+  const grouped = new Map<string, PathTelemetry>();
 
-    return {
-      path: pathKey,
-      requestCount: item.totalCount,
-      errorCount: item.errorCount,
-      errorRatePercent: item.totalCount === 0 ? 0 : Number(((item.errorCount / item.totalCount) * 100).toFixed(2)),
-      p50Ms: Number(p50.toFixed(2)),
-      p95Ms: Number(p95.toFixed(2)),
-      p99Ms: Number(p99.toFixed(2)),
-    };
-  });
+  for (const row of rows) {
+    const key = `${row.method.toUpperCase()} ${row.path}`;
+    const existing = grouped.get(key) ?? { totalCount: 0, errorCount: 0, durationsMs: [] };
+    existing.totalCount += 1;
+    if (row.statusCode >= 500) {
+      existing.errorCount += 1;
+    }
+    existing.durationsMs.push(row.durationMs);
+    grouped.set(key, existing);
+  }
 
-  return rows.sort((a, b) => b.requestCount - a.requestCount);
+  return Array.from(grouped.entries())
+    .map(([pathKey, item]) => {
+      const p50 = percentile(item.durationsMs, 50);
+      const p95 = percentile(item.durationsMs, 95);
+      const p99 = percentile(item.durationsMs, 99);
+
+      return {
+        path: pathKey,
+        requestCount: item.totalCount,
+        errorCount: item.errorCount,
+        errorRatePercent: item.totalCount === 0 ? 0 : Number(((item.errorCount / item.totalCount) * 100).toFixed(2)),
+        p50Ms: Number(p50.toFixed(2)),
+        p95Ms: Number(p95.toFixed(2)),
+        p99Ms: Number(p99.toFixed(2)),
+      };
+    })
+    .sort((a, b) => b.requestCount - a.requestCount);
+}
+
+export async function getPerformanceTelemetry() {
+  if (hasDatabase && db) {
+    try {
+      const rows = await db
+        .select({
+          method: performanceMetrics.method,
+          path: performanceMetrics.path,
+          statusCode: performanceMetrics.statusCode,
+          durationMs: performanceMetrics.durationMs,
+        })
+        .from(performanceMetrics)
+        .orderBy(desc(performanceMetrics.timestamp))
+        .limit(5000);
+
+      return aggregatePerformanceTelemetry(rows);
+    } catch (err) {
+      console.warn("Falling back to in-memory performance telemetry", err);
+    }
+  }
+
+  return aggregatePerformanceTelemetry(
+    Array.from(pathTelemetry.entries()).flatMap(([pathKey, item]) =>
+      item.durationsMs.map((durationMs) => ({
+        method: pathKey.split(" ")[0] ?? "GET",
+        path: pathKey.split(" ").slice(1).join(" ") || pathKey,
+        statusCode: item.errorCount > 0 ? 500 : 200,
+        durationMs,
+      })),
+    ),
+  );
 }
