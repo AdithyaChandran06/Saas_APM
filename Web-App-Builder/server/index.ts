@@ -6,6 +6,9 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { validateRuntimeEnv } from "./env";
 import { recordApiRequest } from "./telemetry";
+import { startAlertEvaluationLoop } from "./services/alert-evaluator";
+import { db } from "./db";
+import { workspaces } from "@shared/schema-extended";
 
 const app = express();
 const httpServer = createServer(app);
@@ -96,6 +99,21 @@ app.use((req, res, next) => {
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
+  }
+
+  // Start alert evaluation loop if database is available
+  if (db) {
+    // Get all active workspace IDs for alert evaluation
+    const getWorkspaceIds = async () => {
+      try {
+        const allWorkspaces = await db.select({ id: workspaces.id }).from(workspaces).limit(1000);
+        return allWorkspaces.map(w => w.id);
+      } catch {
+        return [];
+      }
+    };
+    
+    startAlertEvaluationLoop(db, getWorkspaceIds);
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT

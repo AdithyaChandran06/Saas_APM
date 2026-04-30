@@ -171,16 +171,47 @@ export async function getErrorTelemetry() {
     (acc, item) => {
       acc.total += item.totalCount;
       acc.errors += item.errorCount;
+      acc.totalDuration += item.durationsMs.reduce((a, b) => a + b, 0);
       return acc;
     },
-    { total: 0, errors: 0 },
+    { total: 0, errors: 0, totalDuration: 0 },
   );
 
+  // Calculate top paths by error count
+  const topPaths = Array.from(pathTelemetry.entries())
+    .map(([path, item]) => ({
+      path,
+      count: item.errorCount,
+      avgDuration: item.durationsMs.length > 0 ? item.durationsMs.reduce((a, b) => a + b, 0) / item.durationsMs.length : 0,
+    }))
+    .filter(p => p.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  // Generate error trend (simplified - 24 hourly buckets)
+  const now = new Date();
+  const errorTrend = [];
+  for (let i = 23; i >= 0; i--) {
+    const hour = new Date(now.getTime() - i * 60 * 60 * 1000);
+    errorTrend.push({
+      time: `${hour.getHours()}:00`,
+      count: Math.floor(recentErrors.filter(e => {
+        const eTime = new Date(e.timestamp);
+        return eTime.getHours() === hour.getHours();
+      }).length),
+    });
+  }
+
   return {
-    totalRequests: totals.total,
     totalErrors: totals.errors,
-    errorRatePercent: totals.total === 0 ? 0 : Number(((totals.errors / totals.total) * 100).toFixed(2)),
-    recentErrors,
+    errorRate: totals.total === 0 ? 0 : Number(((totals.errors / totals.total) * 100).toFixed(2)),
+    avgDurationMs: totals.total === 0 ? 0 : totals.totalDuration / totals.total,
+    topPaths,
+    recentErrors: recentErrors.map(e => ({
+      ...e,
+      id: Math.random(),
+    })),
+    errorTrend,
   };
 }
 

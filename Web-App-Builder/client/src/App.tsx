@@ -14,6 +14,7 @@ import Recommendations from "@/pages/Recommendations";
 import Analytics from "@/pages/Analytics";
 import Alerts from "@/pages/Alerts";
 import Settings from "@/pages/Settings";
+import ErrorTracking from "@/pages/ErrorTracking";
 import Landing from "@/pages/Landing";
 import NotFound from "@/pages/not-found";
 
@@ -27,6 +28,7 @@ function ProtectedRoutes() {
         <Route path="/recommendations" component={Recommendations} />
         <Route path="/analytics" component={Analytics} />
         <Route path="/alerts" component={Alerts} />
+        <Route path="/errors" component={ErrorTracking} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>

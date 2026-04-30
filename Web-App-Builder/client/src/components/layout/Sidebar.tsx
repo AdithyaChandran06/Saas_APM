@@ -8,7 +8,8 @@ import {
   Bell,
   Settings, 
   LogOut,
-  BrainCircuit
+  BrainCircuit,
+  AlertTriangle
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,7 @@ const navigation = [
   { name: 'AI Insights', href: '/recommendations', icon: Sparkles },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Alerts', href: '/alerts', icon: Bell },
+  { name: 'Errors', href: '/errors', icon: AlertTriangle },
 ];
 
 export function Sidebar() {
