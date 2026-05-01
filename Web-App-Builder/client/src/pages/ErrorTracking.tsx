@@ -4,19 +4,11 @@ import { AlertTriangle, TrendingUp, Clock, XCircle } from "lucide-react";
 import {
   LineChart,
   Line,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
 } from "recharts";
 import { format } from "date-fns";
 

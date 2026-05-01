@@ -50,32 +50,42 @@ export function DataSimulator() {
     });
   };
 
+  // Only show dev simulator in development
+  if (process.env.NODE_ENV !== 'development') {
+    return null;
+  }
+
   return (
-    <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-50">
-      <div className="bg-card/80 backdrop-blur border border-border p-4 rounded-2xl shadow-xl flex flex-col gap-3 max-w-[200px]">
-        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider text-center">
-          Dev Simulator
+    <div className="mt-12 p-6 rounded-xl bg-yellow-50/50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-900/50">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <span className="text-lg">🧪</span> Development Simulator
+          </h3>
+          <p className="text-xs text-muted-foreground mt-1">Quickly generate test events and feedback</p>
         </div>
-        <Button 
-          size="sm" 
-          variant="outline" 
-          className="justify-start gap-2"
-          onClick={handleSimulateEvent}
-          disabled={isEventPending}
-        >
-          <Activity className="h-4 w-4 text-blue-500" />
-          Simulate Event
-        </Button>
-        <Button 
-          size="sm" 
-          variant="outline" 
-          className="justify-start gap-2"
-          onClick={handleSimulateFeedback}
-          disabled={isFeedbackPending}
-        >
-          <MessageSquarePlus className="h-4 w-4 text-green-500" />
-          Simulate Feedback
-        </Button>
+        <div className="flex gap-3">
+          <Button 
+            size="sm" 
+            variant="outline" 
+            className="gap-2"
+            onClick={handleSimulateEvent}
+            disabled={isEventPending}
+          >
+            <Activity className="h-4 w-4" />
+            Simulate Event
+          </Button>
+          <Button 
+            size="sm" 
+            variant="outline" 
+            className="gap-2"
+            onClick={handleSimulateFeedback}
+            disabled={isFeedbackPending}
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+            Simulate Feedback
+          </Button>
+        </div>
       </div>
     </div>
   );

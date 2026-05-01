@@ -1,8 +1,63 @@
-import { Link } from "wouter";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { BrainCircuit, ChevronRight, BarChart2, ShieldCheck, Zap } from "lucide-react";
 
+type LandingStats = {
+  totalEvents: number;
+  totalFeedback: number;
+  activeUsers: number;
+};
+
+type Recommendation = {
+  id: number;
+  title: string;
+};
+
 export default function Landing() {
+  const [stats, setStats] = useState<LandingStats>({
+    totalEvents: 0,
+    totalFeedback: 0,
+    activeUsers: 0,
+  });
+  const [latestRecommendation, setLatestRecommendation] = useState<string>("No recommendations generated yet");
+
+  useEffect(() => {
+    const fetchLandingData = async () => {
+      try {
+        const [statsRes, recsRes] = await Promise.all([
+          fetch("/api/stats?window=30d", { credentials: "include" }),
+          fetch("/api/recommendations", { credentials: "include" }),
+        ]);
+
+        if (statsRes.ok) {
+          const data = (await statsRes.json()) as Partial<LandingStats>;
+          setStats({
+            totalEvents: data.totalEvents ?? 0,
+            totalFeedback: data.totalFeedback ?? 0,
+            activeUsers: data.activeUsers ?? 0,
+          });
+        }
+
+        if (recsRes.ok) {
+          const recs = (await recsRes.json()) as Recommendation[];
+          if (recs.length > 0 && recs[0].title) {
+            setLatestRecommendation(recs[0].title);
+          }
+        }
+      } catch {
+        // Landing page keeps rendering even if API data is unavailable.
+      }
+    };
+
+    void fetchLandingData();
+  }, []);
+
+  const insightBars = useMemo(() => {
+    const values = [stats.totalEvents, stats.activeUsers, stats.totalFeedback, Math.max(stats.totalEvents - stats.totalFeedback, 0)];
+    const max = Math.max(...values, 1);
+    return values.map((value) => `${Math.max(20, Math.round((value / max) * 100))}%`);
+  }, [stats]);
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Navbar */}
@@ -15,10 +70,10 @@ export default function Landing() {
             </span>
           </div>
           <div className="flex items-center gap-4">
-            <a href="/api/login">
+            <a href="/signin">
               <Button variant="ghost" className="font-medium">Sign In</Button>
             </a>
-            <a href="/api/login">
+            <a href="/signup">
               <Button className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-lg shadow-primary/20">
                 Get Started
               </Button>
@@ -47,14 +102,14 @@ export default function Landing() {
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-in delay-200">
-            <a href="/api/login">
+            <a href="/signup">
               <Button size="lg" className="h-14 px-8 text-lg rounded-full bg-foreground text-background hover:bg-foreground/90 transition-all hover:scale-105">
                 Start for Free <ChevronRight className="ml-2 h-5 w-5" />
               </Button>
             </a>
-            <a href="/api/login">
+            <a href="/signin">
               <Button size="lg" variant="outline" className="h-14 px-8 text-lg rounded-full border-2 hover:bg-secondary">
-                View Demo
+                Sign In
               </Button>
             </a>
           </div>
@@ -78,16 +133,16 @@ export default function Landing() {
                     <div className="h-3 rounded-full bg-muted w-1/2" />
                     <div className="grid grid-cols-3 gap-3 pt-6">
                       <div className="rounded-3xl bg-primary/10 p-4">
-                        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Retention</p>
-                        <p className="mt-3 text-3xl font-bold">+18%</p>
+                        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Active users</p>
+                        <p className="mt-3 text-3xl font-bold">{stats.activeUsers}</p>
                       </div>
                       <div className="rounded-3xl bg-accent/10 p-4">
-                        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Revenue</p>
-                        <p className="mt-3 text-3xl font-bold">$34k</p>
+                        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Events (30d)</p>
+                        <p className="mt-3 text-3xl font-bold">{stats.totalEvents}</p>
                       </div>
                       <div className="rounded-3xl bg-emerald-100 p-4">
-                        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Sentiment</p>
-                        <p className="mt-3 text-3xl font-bold">+12%</p>
+                        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Feedback</p>
+                        <p className="mt-3 text-3xl font-bold">{stats.totalFeedback}</p>
                       </div>
                     </div>
                   </div>
@@ -98,14 +153,14 @@ export default function Landing() {
                     <h3 className="text-2xl font-semibold mt-3">Feature adoption</h3>
                   </div>
                   <div className="mt-8 space-y-4">
-                    <div className="h-2 rounded-full bg-muted/80 w-full" />
-                    <div className="h-2 rounded-full bg-muted/80 w-5/6" />
-                    <div className="h-2 rounded-full bg-muted/80 w-2/3" />
-                    <div className="h-2 rounded-full bg-muted/80 w-3/4" />
+                    <div className="h-2 rounded-full bg-muted/80" style={{ width: insightBars[0] }} />
+                    <div className="h-2 rounded-full bg-muted/80" style={{ width: insightBars[1] }} />
+                    <div className="h-2 rounded-full bg-muted/80" style={{ width: insightBars[2] }} />
+                    <div className="h-2 rounded-full bg-muted/80" style={{ width: insightBars[3] }} />
                   </div>
                   <div className="mt-8 rounded-3xl bg-secondary/70 p-4">
                     <p className="text-sm text-muted-foreground">Latest recommendation</p>
-                    <p className="mt-2 font-semibold">Reduce onboarding friction for new users</p>
+                    <p className="mt-2 font-semibold">{latestRecommendation}</p>
                   </div>
                 </div>
               </div>
@@ -142,7 +197,7 @@ export default function Landing() {
               </div>
               <h3 className="text-xl font-bold mb-3">Enterprise Ready</h3>
               <p className="text-muted-foreground">
-                Secure, scalable, and built for teams. Role-based access control included.
+                Secure, scalable, and built for teams with session-based auth and workspace-aware data.
               </p>
             </div>
           </div>

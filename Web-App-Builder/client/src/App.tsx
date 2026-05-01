@@ -15,7 +15,10 @@ import Analytics from "@/pages/Analytics";
 import Alerts from "@/pages/Alerts";
 import Settings from "@/pages/Settings";
 import ErrorTracking from "@/pages/ErrorTracking";
+import Integration from "@/pages/Integration";
 import Landing from "@/pages/Landing";
+import SignIn from "@/pages/SignIn";
+import SignUp from "@/pages/SignUp";
 import NotFound from "@/pages/not-found";
 
 function ProtectedRoutes() {
@@ -30,6 +33,7 @@ function ProtectedRoutes() {
         <Route path="/alerts" component={Alerts} />
         <Route path="/errors" component={ErrorTracking} />
         <Route path="/settings" component={Settings} />
+        <Route path="/integration" component={Integration} />
         <Route component={NotFound} />
       </Switch>
     </Shell>
@@ -47,10 +51,19 @@ function Router() {
     );
   }
 
+  // Auth routes - available to everyone
   if (!user) {
-    return <Landing />;
+    return (
+      <Switch>
+        <Route path="/" component={Landing} />
+        <Route path="/signin" component={SignIn} />
+        <Route path="/signup" component={SignUp} />
+        <Route component={Landing} />
+      </Switch>
+    );
   }
 
+  // Protected routes - only for authenticated users
   return <ProtectedRoutes />;
 }
 

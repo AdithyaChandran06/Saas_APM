@@ -5,6 +5,7 @@ import { db as appDb, hasDatabase, verifyDatabaseConnection } from "./db";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
+import { authRouter } from "./auth";
 import { registerChatRoutes } from "./replit_integrations/chat";
 import OpenAI from "openai";
 import { and, desc, eq } from "drizzle-orm";
@@ -22,6 +23,7 @@ import { scoreRecommendation } from "./services/scoring";
 import { generateRecommendationsWithRetries } from "./services/ai-recommendations";
 import { getErrorTelemetry, getPerformanceTelemetry, recordClientError } from "./telemetry";
 import type { InsertEvent, InsertFeedback, UpsertUser } from "@shared/schema";
+import { users as authUsers } from "@shared/models/auth";
 
 const openaiApiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
 const openai = openaiApiKey
@@ -267,14 +269,14 @@ export async function registerRoutes(
     await setupAuth(app);
     registerAuthRoutes(app);
   } else {
+    // Use standard auth for local/production environments
+    app.use("/api/auth", authRouter);
+    
     app.get("/api/login", (_req, res) => {
       res.redirect("/");
     });
     app.get("/api/logout", (_req, res) => {
       res.redirect("/");
-    });
-    app.get("/api/auth/user", (_req, res) => {
-      res.json(profileState);
     });
   }
 
@@ -903,12 +905,46 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/profile", async (_req, res) => {
-    res.json(profileState);
+  app.get("/api/profile", async (req, res) => {
+    const userId = req.session?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    if (!appDb) {
+      return res.status(503).json({ message: "Database not available" });
+    }
+
+    const [user] = await appDb
+      .select({
+        id: authUsers.id,
+        email: authUsers.email,
+        firstName: authUsers.firstName,
+        lastName: authUsers.lastName,
+        profileImageUrl: authUsers.profileImageUrl,
+      })
+      .from(authUsers)
+      .where(eq(authUsers.id, userId))
+      .limit(1);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json(user);
   });
 
   app.put("/api/profile", async (req, res) => {
     try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+
+      if (!appDb) {
+        return res.status(503).json({ message: "Database not available" });
+      }
+
       const input = z
         .object({
           firstName: z.string().min(1).optional(),
@@ -917,13 +953,37 @@ export async function registerRoutes(
         })
         .parse(req.body);
 
+      const [updated] = await appDb
+        .update(authUsers)
+        .set({
+          firstName: input.firstName,
+          lastName: input.lastName,
+          email: input.email,
+          updatedAt: new Date(),
+        })
+        .where(eq(authUsers.id, userId))
+        .returning({
+          id: authUsers.id,
+          email: authUsers.email,
+          firstName: authUsers.firstName,
+          lastName: authUsers.lastName,
+          profileImageUrl: authUsers.profileImageUrl,
+        });
+
+      if (!updated) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
       profileState = {
         ...profileState,
-        firstName: input.firstName ?? profileState.firstName,
-        lastName: input.lastName ?? profileState.lastName,
-        email: input.email ?? profileState.email,
+        id: updated.id,
+        email: updated.email ?? profileState.email,
+        firstName: updated.firstName ?? profileState.firstName,
+        lastName: updated.lastName ?? profileState.lastName,
+        profileImageUrl: updated.profileImageUrl ?? "",
       };
-      res.json(profileState);
+
+      res.json(updated);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
@@ -1458,6 +1518,10 @@ export async function registerRoutes(
 
 // Seed function
 async function seedDatabase() {
+  if (process.env.SEED_DEMO_DATA !== "true") {
+    return;
+  }
+
   const { workspaceId } = await resolveWorkspaceContext({ session: {} });
   const count = await storage.getEventsCount(workspaceId);
   if (count === 0) {

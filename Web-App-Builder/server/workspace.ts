@@ -1,6 +1,6 @@
 ﻿import { Router } from "express";
 import { z } from "zod";
-import { db } from "../db";
+import { db } from "./db";
 import { workspaces, workspaceMembers } from "@shared/schema-extended";
 import { users } from "@shared/models/auth";
 import { eq, and } from "drizzle-orm";

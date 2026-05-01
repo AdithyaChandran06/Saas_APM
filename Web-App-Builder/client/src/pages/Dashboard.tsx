@@ -1,6 +1,5 @@
 import { useStats, useErrorsData, usePerformanceData } from "@/hooks/use-pm-data";
 import { KPICard } from "@/components/ui/KPICard";
-import { DataSimulator } from "@/components/DataSimulator";
 import { 
   BarChart, 
   Bar, 
@@ -205,8 +204,6 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
-      <DataSimulator />
 
       {/* Performance & Error Telemetry */}
       {perfData && perfData.routes.length > 0 && (

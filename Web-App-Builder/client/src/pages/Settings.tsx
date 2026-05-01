@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { User, Bell, Lock, Globe, Code, AlertCircle } from "lucide-react";
+import { User, Lock, Globe, Code } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Settings {
@@ -29,32 +29,34 @@ interface ApiKey {
 export default function Settings() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [profile, setProfile] = useState<UserProfile>({
-    id: "demo_user",
-    email: "demo@example.com",
-    firstName: "Demo",
-    lastName: "User",
+    id: "",
+    email: "",
+    firstName: "",
+    lastName: "",
   });
-  const [settings, setSettings] = useState<Settings>({
-    dataCollectionEnabled: true,
-    aiAnalysisFrequency: "daily",
-    retentionDays: 90,
-    privacyMode: false,
-    sampleRate: 1.0,
-  });
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
 
   useEffect(() => {
-    fetchSettings();
-    fetchProfile();
-    fetchApiKeys();
+    const init = async () => {
+      try {
+        await Promise.all([fetchSettings(), fetchProfile(), fetchApiKeys()]);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
+
+    void init();
   }, []);
 
   const fetchProfile = async () => {
     try {
-      const response = await fetch("/api/profile");
+      const response = await fetch("/api/profile", { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch profile");
       const data = await response.json();
       setProfile(data);
     } catch (error) {
@@ -64,7 +66,8 @@ export default function Settings() {
 
   const fetchSettings = async () => {
     try {
-      const response = await fetch("/api/settings");
+      const response = await fetch("/api/settings", { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch settings");
       const data = await response.json();
       setSettings(data);
     } catch (error) {
@@ -74,7 +77,8 @@ export default function Settings() {
 
   const fetchApiKeys = async () => {
     try {
-      const response = await fetch("/api/api-keys");
+      const response = await fetch("/api/api-keys", { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch API keys");
       const data = await response.json();
       setApiKeys(data);
     } catch (error) {
@@ -87,7 +91,10 @@ export default function Settings() {
   };
 
   const handleSettingChange = (field: keyof Settings, value: any) => {
-    setSettings((prev) => ({ ...prev, [field]: value }));
+    setSettings((prev) => {
+      if (!prev) return prev;
+      return { ...prev, [field]: value };
+    });
   };
 
   const saveProfile = async () => {
@@ -96,6 +103,7 @@ export default function Settings() {
       const response = await fetch("/api/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           firstName: profile.firstName,
           lastName: profile.lastName,
@@ -121,11 +129,14 @@ export default function Settings() {
   };
 
   const saveSettings = async () => {
+    if (!settings) return;
+
     try {
       setLoading(true);
       const response = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(settings),
       });
 
@@ -161,6 +172,7 @@ export default function Settings() {
       const response = await fetch("/api/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ name: newKeyName }),
       });
 
@@ -190,6 +202,7 @@ export default function Settings() {
     try {
       const response = await fetch(`/api/api-keys/${id}`, {
         method: "DELETE",
+        credentials: "include",
       });
 
       if (!response.ok) throw new Error("Failed to delete key");
@@ -208,6 +221,20 @@ export default function Settings() {
       });
     }
   };
+
+  if (isInitializing || !settings) {
+    return (
+      <div className="space-y-8 animate-in">
+        <div>
+          <h1 className="text-3xl md:text-4xl text-foreground">Settings</h1>
+          <p className="text-muted-foreground mt-1">Loading your workspace configuration...</p>
+        </div>
+        <div className="bg-card border border-border rounded-2xl p-6 max-w-3xl">
+          <p className="text-sm text-muted-foreground">Fetching live profile and settings data.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-in">
@@ -450,7 +477,7 @@ export default function Settings() {
             <div className="border-t border-border pt-4 space-y-3">
               <input
                 type="text"
-                placeholder="Key name (e.g., Development)"
+                placeholder="Key name"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
                 className="w-full px-4 py-2 rounded-xl bg-secondary/50 border border-border focus:ring-2 focus:ring-primary/20"
@@ -485,20 +512,16 @@ export default function Settings() {
           </h2>
         </div>
         <div className="p-6 space-y-4">
-          <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl flex gap-3">
-            <AlertCircle className="h-5 w-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1 text-sm">
-              <p className="font-medium text-yellow-900">
-                Two-factor authentication
-              </p>
-              <p className="text-yellow-800 text-xs mt-1">
-                Coming soon. Enable 2FA to secure your account.
-              </p>
-            </div>
+          <div className="p-4 bg-secondary/30 border border-border rounded-xl">
+            <p className="font-medium">Session security enabled</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Your account is authenticated with secure HTTP-only session cookies for this workspace.
+            </p>
           </div>
-          <Button variant="outline" disabled>
-            Enable 2FA (Coming Soon)
-          </Button>
+          <div className="p-4 bg-secondary/30 border border-border rounded-xl">
+            <p className="font-medium">Signed in account</p>
+            <p className="text-sm text-muted-foreground mt-1">{profile.email}</p>
+          </div>
         </div>
       </div>
     </div>

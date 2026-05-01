@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcrypt";
 import { z } from "zod";
-import { db } from "../db";
+import { db, hasDatabase } from "./db";
 import { users } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
 
@@ -23,6 +23,10 @@ const loginSchema = z.object({
 // Register new user
 router.post("/register", async (req, res) => {
   try {
+    if (!db || !hasDatabase) {
+      return res.status(503).json({ message: "Database not available. Please ensure PostgreSQL is running and DATABASE_URL is set." });
+    }
+
     const { email, password, firstName, lastName } = registerSchema.parse(req.body);
 
     // Check if user already exists
@@ -63,6 +67,10 @@ router.post("/register", async (req, res) => {
 // Login user
 router.post("/login", async (req, res) => {
   try {
+    if (!db || !hasDatabase) {
+      return res.status(503).json({ message: "Database not available. Please ensure PostgreSQL is running and DATABASE_URL is set." });
+    }
+
     const { email, password } = loginSchema.parse(req.body);
 
     // Find user
@@ -112,6 +120,10 @@ router.get("/user", async (req, res) => {
   }
 
   try {
+    if (!db || !hasDatabase) {
+      return res.status(503).json({ message: "Database not available" });
+    }
+
     const [user] = await db.select({
       id: users.id,
       email: users.email,
