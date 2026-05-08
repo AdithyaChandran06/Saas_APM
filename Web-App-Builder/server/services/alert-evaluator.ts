@@ -6,6 +6,7 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import { alerts as alertsTable, performanceMetrics, errorEvents } from "@shared/schema-extended";
 import type { AppDb } from "../db";
+import { sendNotification, type NotificationChannel } from "./notification-service";
 
 export type AlertConditionType = "error_rate" | "latency_p95" | "latency_p99" | "error_count" | "status_5xx";
 
@@ -135,15 +136,57 @@ export async function evaluateAlertsForWorkspace(
             console.warn(`Failed to update alert ${alert.id}:`, err);
           });
 
-        // TODO: Send notifications via channels (email, Slack, webhook)
-        // For now, just log it
-        console.log(`[ALERT TRIGGERED] ${alert.name}: ${alert.metricType} = ${
+        // Format message
+        const metricValue =
           alert.metricType === "error_rate"
             ? metrics.errorRate.toFixed(2) + "%"
             : alert.metricType === "error_count"
-              ? metrics.errorCount
-              : metrics.latencyP95.toFixed(0) + "ms"
-        } (threshold: ${alert.threshold})`);
+              ? metrics.errorCount.toString()
+              : metrics.latencyP95.toFixed(0) + "ms";
+
+        const message = `${alert.metricType} = ${metricValue} (threshold: ${alert.threshold})`;
+        const title = `Alert Triggered: ${alert.name}`;
+
+        console.log(`[ALERT TRIGGERED] ${title}: ${message}`);
+
+        // Send notifications via configured channels
+        const channels = (alert.channels as NotificationChannel[]) || [];
+        for (const channel of channels) {
+          try {
+            if (channel === "email") {
+              // In production, get email from workspace owner or alert config
+              // For now, log the intent
+              console.log(`[EMAIL] Would send to configured workspace email`);
+            } else if (channel === "slack" && alert.webhookUrl) {
+              await sendNotification({
+                channel: "slack",
+                title,
+                message,
+                slackWebhookUrl: alert.webhookUrl,
+                metadata: {
+                  workspace: workspaceId,
+                  threshold: alert.threshold,
+                  metric: metricValue,
+                },
+              });
+            } else if (channel === "webhook" && alert.webhookUrl) {
+              await sendNotification({
+                channel: "webhook",
+                title,
+                message,
+                webhookUrl: alert.webhookUrl,
+                metadata: {
+                  alertId: alert.id,
+                  workspace: workspaceId,
+                  threshold: alert.threshold,
+                  metric: metricValue,
+                },
+              });
+            }
+          } catch (notificationError) {
+            console.error(`Failed to send ${channel} notification for alert ${alert.id}:`, notificationError);
+          }
+        }
       }
     }
   } catch (error) {

@@ -22,6 +22,8 @@ export const users = pgTable("users", {
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
+  emailVerified: timestamp("email_verified"), // NULL = not verified
+  emailVerificationToken: varchar("email_verification_token"), // For pending verification
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

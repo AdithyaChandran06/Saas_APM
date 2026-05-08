@@ -18,6 +18,15 @@ const runtimeEnv = validateRuntimeEnv();
 const PgSessionStore = connectPgSimple(session);
 const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
 
+// Validate SESSION_SECRET in production
+if (runtimeEnv.NODE_ENV === "production" && !runtimeEnv.SESSION_SECRET) {
+  console.error(
+    "FATAL: SESSION_SECRET environment variable is required in production. " +
+      "Generate a secure secret with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+  );
+  process.exit(1);
+}
+
 if (runtimeEnv.NODE_ENV === "production") {
   app.set("trust proxy", 1);
 }
@@ -92,7 +101,7 @@ app.use(
             tableName: "sessions",
           })
         : undefined,
-    secret: runtimeEnv.SESSION_SECRET || "dev-secret-key",
+    secret: runtimeEnv.SESSION_SECRET || (runtimeEnv.NODE_ENV === "development" ? "dev-secret-key" : undefined)!,
     resave: false,
     saveUninitialized: false,
     cookie: {

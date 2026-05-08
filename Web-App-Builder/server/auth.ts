@@ -4,11 +4,22 @@ import { z } from "zod";
 import { db, hasDatabase } from "./db";
 import { users } from "@shared/models/auth";
 import { eq } from "drizzle-orm";
+import {
+  createVerificationToken,
+  createPasswordResetToken,
+  verifyToken,
+  consumeToken,
+  getVerificationLink,
+  getPasswordResetLink,
+  formatVerificationEmail,
+  formatPasswordResetEmail,
+} from "./services/email-service";
+import { sendEmailNotification } from "./services/notification-service";
 
 const router = Router();
 
 // In-memory fallback for users when database is unavailable
-const memoryUsers = new Map<string, { id: string; email: string; password: string; firstName: string; lastName: string; profileImageUrl: string }>();
+const memoryUsers = new Map<string, { id: string; email: string; password: string; firstName: string; lastName: string; profileImageUrl: string; emailVerified?: Date; emailVerificationToken?: string }>();
 
 function saveSession(req: Request): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -191,6 +202,135 @@ router.get("/user", async (req, res) => {
   } catch (error) {
     console.error("Get user error:", error);
     res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Verify email
+router.post("/verify-email", async (req, res) => {
+  try {
+    const { token } = z.object({ token: z.string() }).parse(req.body);
+
+    const emailToken = verifyToken(token, "verification");
+    if (!emailToken) {
+      return res.status(400).json({ message: "Invalid or expired verification token" });
+    }
+
+    // Find user by email
+    let user: any = null;
+    if (db && hasDatabase) {
+      const [dbUser] = await db.select().from(users).where(eq(users.email, emailToken.email)).limit(1);
+      if (dbUser) {
+        await db
+          .update(users)
+          .set({ emailVerified: new Date(), emailVerificationToken: null })
+          .where(eq(users.id, dbUser.id));
+        user = dbUser;
+      }
+    } else {
+      const memUser = memoryUsers.get(emailToken.email);
+      if (memUser) {
+        memUser.emailVerified = new Date();
+        delete memUser.emailVerificationToken;
+        user = memUser;
+      }
+    }
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    consumeToken(token);
+    res.json({ message: "Email verified successfully" });
+  } catch (error) {
+    console.error("Email verification error:", error);
+    res.status(400).json({ message: "Invalid verification request" });
+  }
+});
+
+// Forgot password - send reset email
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const { email } = z.object({ email: z.string().email() }).parse(req.body);
+
+    // Find user
+    let user: any = null;
+    if (db && hasDatabase) {
+      const [dbUser] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      user = dbUser;
+    } else {
+      user = memoryUsers.get(email);
+    }
+
+    if (!user) {
+      // Don't leak whether user exists - return success anyway
+      return res.json({ message: "If an account exists, password reset email will be sent" });
+    }
+
+    // Create password reset token
+    const resetToken = createPasswordResetToken(email);
+    const resetLink = getPasswordResetLink(resetToken.token);
+    const { subject, html } = formatPasswordResetEmail(resetToken.token);
+
+    // Send email (will log if SMTP not configured)
+    try {
+      await sendEmailNotification(email, subject, html.replace(/^<[^>]+>/, "").replace(/<[^>]+>$/g, ""));
+    } catch (emailError) {
+      console.error("Failed to send password reset email:", emailError);
+      // Still return success - user can use reset link
+    }
+
+    console.log(`[Password Reset] Reset link for ${email}: ${resetLink}`);
+    res.json({ message: "Password reset email sent" });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    res.status(400).json({ message: "Invalid request" });
+  }
+});
+
+// Reset password - use token from forgot-password email
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = z
+      .object({
+        token: z.string(),
+        newPassword: z.string().min(8),
+      })
+      .parse(req.body);
+
+    const resetToken = verifyToken(token, "password-reset");
+    if (!resetToken) {
+      return res.status(400).json({ message: "Invalid or expired reset token" });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    let user: any = null;
+
+    if (db && hasDatabase) {
+      const [dbUser] = await db.select().from(users).where(eq(users.email, resetToken.email)).limit(1);
+      if (dbUser) {
+        await db
+          .update(users)
+          .set({ password: hashedPassword })
+          .where(eq(users.id, dbUser.id));
+        user = dbUser;
+      }
+    } else {
+      const memUser = memoryUsers.get(resetToken.email);
+      if (memUser) {
+        memUser.password = hashedPassword;
+        user = memUser;
+      }
+    }
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    consumeToken(token);
+    res.json({ message: "Password reset successfully" });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(400).json({ message: "Invalid reset request" });
   }
 });
 

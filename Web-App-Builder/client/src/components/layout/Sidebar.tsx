@@ -22,6 +22,7 @@ const navigation = [
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Alerts', href: '/alerts', icon: Bell },
   { name: 'Errors', href: '/errors', icon: AlertTriangle },
+  { name: 'Integration', href: '/integration', icon: Sparkles },
 ];
 
 export function Sidebar() {
