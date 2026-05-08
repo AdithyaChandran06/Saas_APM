@@ -210,7 +210,7 @@ router.post("/verify-email", async (req, res) => {
   try {
     const { token } = z.object({ token: z.string() }).parse(req.body);
 
-    const emailToken = verifyToken(token, "verification");
+    const emailToken = await verifyToken(token, "verification");
     if (!emailToken) {
       return res.status(400).json({ message: "Invalid or expired verification token" });
     }
@@ -239,7 +239,7 @@ router.post("/verify-email", async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    consumeToken(token);
+    await consumeToken(token);
     res.json({ message: "Email verified successfully" });
   } catch (error) {
     console.error("Email verification error:", error);
@@ -297,7 +297,7 @@ router.post("/reset-password", async (req, res) => {
       })
       .parse(req.body);
 
-    const resetToken = verifyToken(token, "password-reset");
+    const resetToken = await verifyToken(token, "password-reset");
     if (!resetToken) {
       return res.status(400).json({ message: "Invalid or expired reset token" });
     }
@@ -326,7 +326,7 @@ router.post("/reset-password", async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    consumeToken(token);
+    await consumeToken(token);
     res.json({ message: "Password reset successfully" });
   } catch (error) {
     console.error("Reset password error:", error);

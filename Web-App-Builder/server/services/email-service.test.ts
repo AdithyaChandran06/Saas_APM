@@ -1,1 +1,227 @@
-/**\n * Tests for Email Service\n */\n\nimport { describe, it, expect, beforeEach, afterEach } from \"vitest\";\nimport {\n  generateToken,\n  createVerificationToken,\n  createPasswordResetToken,\n  verifyToken,\n  consumeToken,\n  emailTokens,\n  getVerificationLink,\n  getPasswordResetLink,\n} from \"../services/email-service\";\n\ndescribe(\"Email Service\", () => {\n  beforeEach(() => {\n    // Clear tokens before each test\n    emailTokens.clear();\n  });\n\n  describe(\"generateToken\", () => {\n    it(\"should generate a valid token\", () => {\n      const token = generateToken();\n      expect(token).toBeDefined();\n      expect(typeof token).toBe(\"string\");\n      expect(token.length).toBeGreaterThan(0);\n    });\n\n    it(\"should generate unique tokens\", () => {\n      const token1 = generateToken();\n      const token2 = generateToken();\n      expect(token1).not.toBe(token2);\n    });\n  });\n\n  describe(\"createVerificationToken\", () => {\n    it(\"should create a verification token\", () => {\n      const email = \"test@example.com\";\n      const emailToken = createVerificationToken(email);\n\n      expect(emailToken).toBeDefined();\n      expect(emailToken.email).toBe(email);\n      expect(emailToken.type).toBe(\"verification\");\n      expect(emailToken.expiresAt).toBeInstanceOf(Date);\n      expect(emailToken.createdAt).toBeInstanceOf(Date);\n    });\n\n    it(\"should store token in map\", () => {\n      const email = \"test@example.com\";\n      const emailToken = createVerificationToken(email);\n\n      expect(emailTokens.has(emailToken.token)).toBe(true);\n      expect(emailTokens.get(emailToken.token)).toBe(emailToken);\n    });\n\n    it(\"should have 24 hour expiration\", () => {\n      const emailToken = createVerificationToken(\"test@example.com\");\n      const expirationMs = emailToken.expiresAt.getTime() - emailToken.createdAt.getTime();\n      const expectedMs = 24 * 60 * 60 * 1000;\n\n      // Allow 1 second variance\n      expect(Math.abs(expirationMs - expectedMs)).toBeLessThan(1000);\n    });\n  });\n\n  describe(\"createPasswordResetToken\", () => {\n    it(\"should create a password reset token\", () => {\n      const email = \"test@example.com\";\n      const emailToken = createPasswordResetToken(email);\n\n      expect(emailToken).toBeDefined();\n      expect(emailToken.email).toBe(email);\n      expect(emailToken.type).toBe(\"password-reset\");\n    });\n\n    it(\"should have 1 hour expiration\", () => {\n      const emailToken = createPasswordResetToken(\"test@example.com\");\n      const expirationMs = emailToken.expiresAt.getTime() - emailToken.createdAt.getTime();\n      const expectedMs = 1 * 60 * 60 * 1000;\n\n      // Allow 1 second variance\n      expect(Math.abs(expirationMs - expectedMs)).toBeLessThan(1000);\n    });\n  });\n\n  describe(\"verifyToken\", () => {\n    it(\"should verify a valid verification token\", () => {\n      const email = \"test@example.com\";\n      const emailToken = createVerificationToken(email);\n\n      const verified = verifyToken(emailToken.token, \"verification\");\n      expect(verified).toBeDefined();\n      expect(verified?.email).toBe(email);\n    });\n\n    it(\"should reject invalid token\", () => {\n      const verified = verifyToken(\"invalid-token\", \"verification\");\n      expect(verified).toBeNull();\n    });\n\n    it(\"should reject wrong token type\", () => {\n      const emailToken = createVerificationToken(\"test@example.com\");\n      const verified = verifyToken(emailToken.token, \"password-reset\");\n      expect(verified).toBeNull();\n    });\n\n    it(\"should reject expired token\", () => {\n      const email = \"test@example.com\";\n      const emailToken = createVerificationToken(email);\n      // Set expiration to past\n      emailToken.expiresAt = new Date(Date.now() - 1000);\n\n      const verified = verifyToken(emailToken.token, \"verification\");\n      expect(verified).toBeNull();\n      // Expired token should be deleted\n      expect(emailTokens.has(emailToken.token)).toBe(false);\n    });\n  });\n\n  describe(\"consumeToken\", () => {\n    it(\"should remove token from storage\", () => {\n      const emailToken = createVerificationToken(\"test@example.com\");\n      expect(emailTokens.has(emailToken.token)).toBe(true);\n\n      consumeToken(emailToken.token);\n      expect(emailTokens.has(emailToken.token)).toBe(false);\n    });\n\n    it(\"should return false for non-existent token\", () => {\n      const result = consumeToken(\"non-existent\");\n      expect(result).toBe(false);\n    });\n  });\n\n  describe(\"Link generation\", () => {\n    it(\"should generate verification link\", () => {\n      const token = generateToken();\n      const link = getVerificationLink(token);\n\n      expect(link).toContain(\"/verify-email\");\n      expect(link).toContain(`token=${token}`);\n    });\n\n    it(\"should generate password reset link\", () => {\n      const token = generateToken();\n      const link = getPasswordResetLink(token);\n\n      expect(link).toContain(\"/reset-password\");\n      expect(link).toContain(`token=${token}`);\n    });\n  });\n});\n
+/**
+ * Tests for Email Service
+ */
+
+import { describe, it, expect, beforeEach } from "vitest";
+import {
+  generateToken,
+  createVerificationToken,
+  createPasswordResetToken,
+  verifyToken,
+  consumeToken,
+  emailTokens,
+  getVerificationLink,
+  getPasswordResetLink,
+} from "../services/email-service";
+
+describe("Email Service", () => {
+  beforeEach(() => {
+    // Clear tokens before each test
+    emailTokens.clear();
+  });
+
+  describe("generateToken", () => {
+    it("should generate a valid token", () => {
+      const token = generateToken();
+      expect(token).toBeDefined();
+      expect(typeof token).toBe("string");
+      expect(token.length).toBeGreaterThan(0);
+    });
+
+    it("should generate unique tokens", () => {
+      const token1 = generateToken();
+      const token2 = generateToken();
+      expect(token1).not.toBe(token2);
+    });
+  });
+
+  describe("createVerificationToken", () => {
+    it("should create a verification token", () => {
+      const email = "test@example.com";
+      const emailToken = createVerificationToken(email);
+
+      expect(emailToken).toBeDefined();
+      expect(emailToken.email).toBe(email);
+      expect(emailToken.type).toBe("verification");
+      expect(emailToken.expiresAt).toBeInstanceOf(Date);
+      expect(emailToken.createdAt).toBeInstanceOf(Date);
+    });
+
+    it("should store token in map", () => {
+      const email = "test@example.com";
+      const emailToken = createVerificationToken(email);
+
+      expect(emailTokens.has(emailToken.token)).toBe(true);
+      expect(emailTokens.get(emailToken.token)).toBe(emailToken);
+    });
+
+    it("should have 24 hour expiration", () => {
+      const emailToken = createVerificationToken("test@example.com");
+      const expirationMs = emailToken.expiresAt.getTime() - emailToken.createdAt.getTime();
+      const expectedMs = 24 * 60 * 60 * 1000;
+
+      // Allow 1 second variance
+      expect(Math.abs(expirationMs - expectedMs)).toBeLessThan(1000);
+    });
+  });
+
+  describe("createPasswordResetToken", () => {
+    it("should create a password reset token", () => {
+      const email = "test@example.com";
+      const emailToken = createPasswordResetToken(email);
+
+      expect(emailToken).toBeDefined();
+      expect(emailToken.email).toBe(email);
+      expect(emailToken.type).toBe("password-reset");
+    });
+
+    it("should have 1 hour expiration", () => {
+      const emailToken = createPasswordResetToken("test@example.com");
+      const expirationMs = emailToken.expiresAt.getTime() - emailToken.createdAt.getTime();
+      const expectedMs = 1 * 60 * 60 * 1000;
+
+      // Allow 1 second variance
+      expect(Math.abs(expirationMs - expectedMs)).toBeLessThan(1000);
+    });
+  });
+
+  describe("verifyToken", () => {
+    it("should verify a valid verification token", async () => {
+      const email = "test@example.com";
+      const emailToken = createVerificationToken(email);
+
+      const verified = await verifyToken(emailToken.token, "verification");
+      expect(verified).toBeDefined();
+      expect(verified?.email).toBe(email);
+    });
+
+    it("should reject invalid token", async () => {
+      const verified = await verifyToken("invalid-token", "verification");
+      expect(verified).toBeNull();
+    });
+
+    it("should reject wrong token type", async () => {
+      const emailToken = createVerificationToken("test@example.com");
+      const verified = await verifyToken(emailToken.token, "password-reset");
+      expect(verified).toBeNull();
+    });
+
+    it("should reject expired token", async () => {
+      const email = "test@example.com";
+      const emailToken = createVerificationToken(email);
+      // Set expiration to past
+      emailToken.expiresAt = new Date(Date.now() - 1000);
+
+      const verified = await verifyToken(emailToken.token, "verification");
+      expect(verified).toBeNull();
+      // Expired token should be deleted
+      expect(emailTokens.has(emailToken.token)).toBe(false);
+    });
+  });
+
+  describe("consumeToken", () => {
+    it("should remove token from storage", async () => {
+      const emailToken = createVerificationToken("test@example.com");
+      expect(emailTokens.has(emailToken.token)).toBe(true);
+
+      await consumeToken(emailToken.token);
+      expect(emailTokens.has(emailToken.token)).toBe(false);
+    });
+
+    it("should return false for non-existent token", async () => {
+      const result = await consumeToken("non-existent");
+      expect(result).toBe(false);
+    });
+
+    it("should handle multiple consumptions gracefully", async () => {
+      const emailToken = createVerificationToken("test@example.com");
+      const result1 = await consumeToken(emailToken.token);
+      const result2 = await consumeToken(emailToken.token);
+
+      expect(result1).toBe(true);
+      expect(result2).toBe(false);
+    });
+  });
+
+  describe("Link generation", () => {
+    it("should generate verification link", () => {
+      const token = generateToken();
+      const link = getVerificationLink(token);
+
+      expect(link).toContain("/verify-email");
+      expect(link).toContain(`token=${token}`);
+    });
+
+    it("should generate password reset link", () => {
+      const token = generateToken();
+      const link = getPasswordResetLink(token);
+
+      expect(link).toContain("/reset-password");
+      expect(link).toContain(`token=${token}`);
+    });
+
+    it("should include base URL in links", () => {
+      const token = generateToken();
+      const verificationLink = getVerificationLink(token);
+      const resetLink = getPasswordResetLink(token);
+
+      expect(verificationLink).toMatch(/^http:\/\/|^https:\/\//);
+      expect(resetLink).toMatch(/^http:\/\/|^https:\/\//);
+    });
+  });
+
+  describe("Token lifecycle", () => {
+    it("should complete full verification flow", async () => {
+      const email = "user@example.com";
+      
+      // Create token
+      const emailToken = createVerificationToken(email);
+      expect(emailTokens.has(emailToken.token)).toBe(true);
+
+      // Verify token
+      const verified = await verifyToken(emailToken.token, "verification");
+      expect(verified).not.toBeNull();
+
+      // Consume token
+      const consumed = await consumeToken(emailToken.token);
+      expect(consumed).toBe(true);
+      expect(emailTokens.has(emailToken.token)).toBe(false);
+
+      // Can't verify after consumption
+      const reVerified = await verifyToken(emailToken.token, "verification");
+      expect(reVerified).toBeNull();
+    });
+
+    it("should handle password reset flow", async () => {
+      const email = "user@example.com";
+      
+      // Create reset token
+      const resetToken = createPasswordResetToken(email);
+      expect(resetToken.type).toBe("password-reset");
+
+      // Verify reset token
+      const verified = await verifyToken(resetToken.token, "password-reset");
+      expect(verified?.email).toBe(email);
+
+      // Consume reset token
+      const consumed = await consumeToken(resetToken.token);
+      expect(consumed).toBe(true);
+    });
+
+    it("should maintain separate token namespaces", async () => {
+      const email = "user@example.com";
+      
+      // Create both types
+      const verificationToken = createVerificationToken(email);
+      const resetToken = createPasswordResetToken(email);
+
+      // Verification token should not work as reset token
+      const asReset = await verifyToken(verificationToken.token, "password-reset");
+      expect(asReset).toBeNull();
+
+      // Reset token should not work as verification token
+      const asVerification = await verifyToken(resetToken.token, "verification");
+      expect(asVerification).toBeNull();
+    });
+  });
+});\n

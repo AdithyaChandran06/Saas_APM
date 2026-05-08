@@ -9,6 +9,7 @@ import { createServer } from "http";
 import { validateRuntimeEnv } from "./env";
 import { recordApiRequest } from "./telemetry";
 import { startAlertEvaluationLoop } from "./services/alert-evaluator";
+import { initializeEmailTokens } from "./services/email-service";
 import { db, pool } from "./db";
 import { workspaces } from "@shared/schema-extended";
 
@@ -159,6 +160,9 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Initialize email token service (database or in-memory)
+  await initializeEmailTokens();
+
   app.use("/api/workspaces", workspaceRouter);
   await registerRoutes(httpServer, app);
 

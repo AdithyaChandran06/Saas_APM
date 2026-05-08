@@ -8,7 +8,8 @@ import {
   Bell,
   Settings, 
   LogOut,
-  AlertTriangle
+  AlertTriangle,
+  Plug
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -22,7 +23,7 @@ const navigation = [
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Alerts', href: '/alerts', icon: Bell },
   { name: 'Errors', href: '/errors', icon: AlertTriangle },
-  { name: 'Integration', href: '/integration', icon: Sparkles },
+  { name: 'Integration', href: '/integration', icon: Plug },
 ];
 
 export function Sidebar() {
