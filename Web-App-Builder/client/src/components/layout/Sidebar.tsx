@@ -8,11 +8,11 @@ import {
   Bell,
   Settings, 
   LogOut,
-  BrainCircuit,
   AlertTriangle
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
+import { QuantoraLogo } from "@/components/brand/QuantoraLogo";
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -31,10 +31,7 @@ export function Sidebar() {
   return (
     <div className="flex h-full w-64 flex-col bg-card border-r border-border">
       <div className="flex h-16 items-center px-6 border-b border-border/40">
-        <BrainCircuit className="h-8 w-8 text-primary mr-2" />
-        <span className="text-xl font-display font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
-          PM-AI
-        </span>
+        <QuantoraLogo />
       </div>
 
       <div className="flex-1 flex flex-col gap-1 p-4 overflow-y-auto">

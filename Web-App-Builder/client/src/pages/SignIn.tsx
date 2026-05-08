@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { BrainCircuit, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import { QuantoraLogo } from "@/components/brand/QuantoraLogo";
 
 export default function SignIn() {
   const [, setLocation] = useLocation();
@@ -43,15 +44,17 @@ export default function SignIn() {
         throw new Error(data.message || "Login failed");
       }
 
-      // Invalidate user query to refetch
-      await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      const data = await response.json();
+      // Prime auth state from login response to avoid a cookie/session timing race.
+      queryClient.setQueryData(["/api/auth/user"], data.user ?? null);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
 
       toast({
         title: "Welcome back!",
         description: "You've successfully signed in.",
       });
 
-      setLocation("/");
+      setLocation("/dashboard");
     } catch (error) {
       toast({
         title: "Sign in failed",
@@ -69,10 +72,7 @@ export default function SignIn() {
       <nav className="border-b border-border/40 backdrop-blur-md">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <BrainCircuit className="h-8 w-8 text-primary" />
-            <span className="text-xl font-display font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
-              PM-AI
-            </span>
+            <QuantoraLogo />
           </div>
           <div className="text-sm text-muted-foreground">
             Don't have an account?{" "}
@@ -91,7 +91,7 @@ export default function SignIn() {
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold mb-2">Welcome Back</h1>
-            <p className="text-muted-foreground">Sign in to your PM-AI account</p>
+            <p className="text-muted-foreground">Sign in to your Quantora account</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -113,7 +113,7 @@ export default function SignIn() {
               <Input
                 type="password"
                 name="password"
-                placeholder="••••••••"
+                placeholder="********"
                 value={formData.password}
                 onChange={handleChange}
                 required

@@ -3,10 +3,9 @@
  * Periodically evaluates alert conditions against metrics and triggers notifications
  */
 
-import type { Drizzle } from "drizzle-orm";
-import { and, eq, gte, desc, sql } from "drizzle-orm";
-import type { Alert } from "@shared/schema-extended";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { alerts as alertsTable, performanceMetrics, errorEvents } from "@shared/schema-extended";
+import type { AppDb } from "../db";
 
 export type AlertConditionType = "error_rate" | "latency_p95" | "latency_p99" | "error_count" | "status_5xx";
 
@@ -59,7 +58,7 @@ function isAlertTriggered(
  * Gather metrics for alert evaluation from telemetry
  */
 async function gatherMetrics(
-  db: Drizzle<any>,
+  db: AppDb,
   workspaceId: number,
 ): Promise<AlertEvaluationContext["metrics"]> {
   const now = new Date();
@@ -100,7 +99,7 @@ async function gatherMetrics(
  * Evaluate all alerts for a workspace and trigger notifications
  */
 export async function evaluateAlertsForWorkspace(
-  db: Drizzle<any>,
+  db: AppDb,
   workspaceId: number,
 ): Promise<void> {
   try {
@@ -132,7 +131,7 @@ export async function evaluateAlertsForWorkspace(
             triggeredAt: new Date(),
           })
           .where(eq(alertsTable.id, alert.id))
-          .catch((err) => {
+          .catch((err: unknown) => {
             console.warn(`Failed to update alert ${alert.id}:`, err);
           });
 
@@ -155,7 +154,7 @@ export async function evaluateAlertsForWorkspace(
 /**
  * Start the alert evaluation loop (runs every minute)
  */
-export function startAlertEvaluationLoop(db: Drizzle<any> | null, workspaceIds: number[] | (() => Promise<number[]>)): NodeJS.Timer | null {
+export function startAlertEvaluationLoop(db: AppDb | null, workspaceIds: number[] | (() => Promise<number[]>)): NodeJS.Timeout | null {
   if (!db) return null;
 
   return setInterval(async () => {

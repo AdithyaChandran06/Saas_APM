@@ -5,7 +5,7 @@ import { db as appDb, hasDatabase, verifyDatabaseConnection } from "./db";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { setupAuth, registerAuthRoutes } from "./replit_integrations/auth";
-import { authRouter } from "./auth";
+import { authRouter, memoryUsers } from "./auth";
 import { registerChatRoutes } from "./replit_integrations/chat";
 import OpenAI from "openai";
 import { and, desc, eq } from "drizzle-orm";
@@ -98,6 +98,19 @@ function parseNumericParam(value: string | string[]) {
   return parseInt(Array.isArray(value) ? value[0] : value, 10);
 }
 
+function getHeaderValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function getApiKeyFromRequest(req: any) {
+  const explicitKey = getHeaderValue(req.headers?.["x-api-key"]);
+  if (explicitKey) return explicitKey;
+
+  const authorization = getHeaderValue(req.headers?.authorization);
+  const match = authorization?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1];
+}
+
 function weekKey(date: Date) {
   const year = date.getUTCFullYear();
   const start = new Date(Date.UTC(year, 0, 1));
@@ -138,7 +151,53 @@ async function ensureLocalUser(userId: string) {
 }
 
 async function resolveWorkspaceContext(req: any, requestedWorkspaceId?: number) {
-  const userId = req.session?.userId ?? profileState.id;
+  const apiKey = getApiKeyFromRequest(req);
+
+  if (apiKey) {
+    if (!hasDatabase || !appDb || !hasExtendedDbTables) {
+      const memoryKey = apiKeysState.find((item) => item.key === apiKey);
+      if (!memoryKey) {
+        const error = new Error("Invalid API key") as Error & { status?: number };
+        error.status = 401;
+        throw error;
+      }
+      memoryKey.lastUsed = new Date().toISOString();
+      return { userId: profileState.id, workspaceId: requestedWorkspaceId ?? 1 };
+    }
+
+    const [keyRecord] = await appDb
+      .select({
+        id: apiKeysTable.id,
+        workspaceId: apiKeysTable.workspaceId,
+      })
+      .from(apiKeysTable)
+      .where(and(eq(apiKeysTable.key, apiKey), eq(apiKeysTable.isActive, true)))
+      .limit(1);
+
+    if (!keyRecord) {
+      const error = new Error("Invalid API key") as Error & { status?: number };
+      error.status = 401;
+      throw error;
+    }
+
+    if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== keyRecord.workspaceId) {
+      const error = new Error("API key is not authorized for this workspace") as Error & { status?: number };
+      error.status = 403;
+      throw error;
+    }
+
+    await appDb.update(apiKeysTable).set({ lastUsed: new Date() }).where(eq(apiKeysTable.id, keyRecord.id));
+    return { userId: profileState.id, workspaceId: keyRecord.workspaceId };
+  }
+
+  const sessionUserId = req.session?.userId;
+  if (process.env.NODE_ENV === "production" && !sessionUserId) {
+    const error = new Error("Authentication required") as Error & { status?: number };
+    error.status = 401;
+    throw error;
+  }
+
+  const userId = sessionUserId ?? profileState.id;
 
   if (!hasDatabase || !appDb || !hasExtendedDbTables) {
     return { userId, workspaceId: requestedWorkspaceId ?? 1 };
@@ -261,8 +320,20 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  await verifyDatabaseConnection();
+  const databaseConnected = await verifyDatabaseConnection();
+  if (process.env.NODE_ENV === "production" && !databaseConnected) {
+    throw new Error("Database connection is required in production.");
+  }
+
   refreshStorage();
+
+  app.get("/api/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      database: hasDatabase ? "connected" : "unavailable",
+      mode: process.env.NODE_ENV || "development",
+    });
+  });
 
   // Setup Integrations
   if (process.env.REPL_ID) {
@@ -911,27 +982,46 @@ export async function registerRoutes(
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    if (!appDb) {
-      return res.status(503).json({ message: "Database not available" });
+    try {
+      let user: any = null;
+      if (appDb && hasDatabase) {
+        const [dbUser] = await appDb
+          .select({
+            id: authUsers.id,
+            email: authUsers.email,
+            firstName: authUsers.firstName,
+            lastName: authUsers.lastName,
+            profileImageUrl: authUsers.profileImageUrl,
+          })
+          .from(authUsers)
+          .where(eq(authUsers.id, userId))
+          .limit(1);
+        user = dbUser;
+      } else {
+        // Find user in memoryUsers
+        for (const memUser of memoryUsers.values()) {
+          if (memUser.id === userId) {
+            user = {
+              id: memUser.id,
+              email: memUser.email,
+              firstName: memUser.firstName,
+              lastName: memUser.lastName,
+              profileImageUrl: memUser.profileImageUrl,
+            };
+            break;
+          }
+        }
+      }
+
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      return res.json(user);
+    } catch (error) {
+      console.error("Profile fetch error:", error);
+      return res.status(500).json({ message: "Failed to fetch profile" });
     }
-
-    const [user] = await appDb
-      .select({
-        id: authUsers.id,
-        email: authUsers.email,
-        firstName: authUsers.firstName,
-        lastName: authUsers.lastName,
-        profileImageUrl: authUsers.profileImageUrl,
-      })
-      .from(authUsers)
-      .where(eq(authUsers.id, userId))
-      .limit(1);
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    return res.json(user);
   });
 
   app.put("/api/profile", async (req, res) => {
@@ -939,10 +1029,6 @@ export async function registerRoutes(
       const userId = req.session?.userId;
       if (!userId) {
         return res.status(401).json({ message: "Not authenticated" });
-      }
-
-      if (!appDb) {
-        return res.status(503).json({ message: "Database not available" });
       }
 
       const input = z
@@ -953,45 +1039,69 @@ export async function registerRoutes(
         })
         .parse(req.body);
 
-      const [updated] = await appDb
-        .update(authUsers)
-        .set({
-          firstName: input.firstName,
-          lastName: input.lastName,
-          email: input.email,
-          updatedAt: new Date(),
-        })
-        .where(eq(authUsers.id, userId))
-        .returning({
-          id: authUsers.id,
-          email: authUsers.email,
-          firstName: authUsers.firstName,
-          lastName: authUsers.lastName,
-          profileImageUrl: authUsers.profileImageUrl,
-        });
+      let updated: any = null;
+      
+      if (appDb && hasDatabase) {
+        const [dbUpdated] = await appDb
+          .update(authUsers)
+          .set({
+            firstName: input.firstName,
+            lastName: input.lastName,
+            email: input.email,
+            updatedAt: new Date(),
+          })
+          .where(eq(authUsers.id, userId))
+          .returning({
+            id: authUsers.id,
+            email: authUsers.email,
+            firstName: authUsers.firstName,
+            lastName: authUsers.lastName,
+            profileImageUrl: authUsers.profileImageUrl,
+          });
+        updated = dbUpdated;
+        
+        if (dbUpdated) {
+          profileState = {
+            ...profileState,
+            id: dbUpdated.id,
+            email: dbUpdated.email ?? profileState.email,
+            firstName: dbUpdated.firstName ?? profileState.firstName,
+            lastName: dbUpdated.lastName ?? profileState.lastName,
+            profileImageUrl: dbUpdated.profileImageUrl ?? "",
+          };
+        }
+      } else {
+        // Update in memoryUsers
+        for (const memUser of memoryUsers.values()) {
+          if (memUser.id === userId) {
+            const updatedUser = {
+              ...memUser,
+              email: input.email ?? memUser.email,
+              firstName: input.firstName ?? memUser.firstName,
+              lastName: input.lastName ?? memUser.lastName,
+            };
+            memoryUsers.set(memUser.email, updatedUser);
+            
+            updated = {
+              id: updatedUser.id,
+              email: updatedUser.email,
+              firstName: updatedUser.firstName,
+              lastName: updatedUser.lastName,
+              profileImageUrl: updatedUser.profileImageUrl,
+            };
+            break;
+          }
+        }
+      }
 
       if (!updated) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      profileState = {
-        ...profileState,
-        id: updated.id,
-        email: updated.email ?? profileState.email,
-        firstName: updated.firstName ?? profileState.firstName,
-        lastName: updated.lastName ?? profileState.lastName,
-        profileImageUrl: updated.profileImageUrl ?? "",
-      };
-
       res.json(updated);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join("."),
-        });
-      }
-      throw err;
+    } catch (error) {
+      console.error("Profile update error:", error);
+      res.status(400).json({ message: "Invalid profile data" });
     }
   });
 

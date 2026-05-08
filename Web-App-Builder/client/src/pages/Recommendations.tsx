@@ -39,7 +39,7 @@ export default function Recommendations() {
             AI Product Strategy
           </h1>
           <p className="text-muted-foreground max-w-xl">
-            Autonomous analysis of your events and feedback to generate high-impact product recommendations.
+            Quantora analyzes your events and feedback to generate high-impact product recommendations.
           </p>
         </div>
         <Button 

@@ -127,7 +127,7 @@ export default function Integration() {
         <div>
           <h1 className="text-3xl md:text-4xl text-foreground">Integrations</h1>
           <p className="text-muted-foreground mt-1">
-            Connect your applications to PM-AI and start collecting events
+            Connect your applications to Quantora and start collecting events
           </p>
         </div>
         <Button
@@ -235,14 +235,14 @@ export default function Integration() {
                 <div>
                   <p className="text-sm text-muted-foreground mb-2">Install package:</p>
                   <div className="bg-secondary/50 p-3 rounded font-mono text-sm break-all">
-                    npm install @saas-apm/apm-sdk
+                    npm install @quantora/sdk
                   </div>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground mb-2">Initialize in your app:</p>
                   {apiKeyForExamples ? (
                     <div className="bg-secondary/50 p-3 rounded font-mono text-sm overflow-auto">
-                      <pre>{`import { createAPMClient } from "@saas-apm/apm-sdk";
+                      <pre>{`import { createAPMClient } from "@quantora/sdk";
 
 const apm = createAPMClient({
   apiKey: "${apiKeyForExamples}",

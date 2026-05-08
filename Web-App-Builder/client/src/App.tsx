@@ -25,7 +25,7 @@ function ProtectedRoutes() {
   return (
     <Shell>
       <Switch>
-        <Route path="/" component={Dashboard} />
+        <Route path="/dashboard" component={Dashboard} />
         <Route path="/events" component={Events} />
         <Route path="/feedback" component={Feedback} />
         <Route path="/recommendations" component={Recommendations} />
@@ -34,6 +34,7 @@ function ProtectedRoutes() {
         <Route path="/errors" component={ErrorTracking} />
         <Route path="/settings" component={Settings} />
         <Route path="/integration" component={Integration} />
+        <Route path="/" component={Dashboard} />
         <Route component={NotFound} />
       </Switch>
     </Shell>

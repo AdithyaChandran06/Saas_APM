@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import { registerRoutes } from "./routes";
 import { workspaceRouter } from "./workspace";
 import { serveStatic } from "./static";
@@ -8,11 +9,18 @@ import { createServer } from "http";
 import { validateRuntimeEnv } from "./env";
 import { recordApiRequest } from "./telemetry";
 import { startAlertEvaluationLoop } from "./services/alert-evaluator";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { workspaces } from "@shared/schema-extended";
 
 const app = express();
 const httpServer = createServer(app);
+const runtimeEnv = validateRuntimeEnv();
+const PgSessionStore = connectPgSimple(session);
+const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
+
+if (runtimeEnv.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
 
 declare module "http" {
   interface IncomingMessage {
@@ -20,25 +28,77 @@ declare module "http" {
   }
 }
 
+function applySecurityHeaders(req: Request, res: Response, next: NextFunction) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+  if (runtimeEnv.NODE_ENV === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+
+  next();
+}
+
+function rateLimit(options: { windowMs: number; max: number; scope: string }) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const forwardedFor = req.headers["x-forwarded-for"];
+    const ip = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor?.split(",")[0]?.trim() || req.ip;
+    const key = `${options.scope}:${ip}`;
+    const now = Date.now();
+    const bucket = rateLimitBuckets.get(key);
+
+    if (!bucket || bucket.resetAt <= now) {
+      rateLimitBuckets.set(key, { count: 1, resetAt: now + options.windowMs });
+      return next();
+    }
+
+    bucket.count += 1;
+    if (bucket.count > options.max) {
+      res.setHeader("Retry-After", Math.ceil((bucket.resetAt - now) / 1000).toString());
+      return res.status(429).json({ message: "Too many requests. Please try again shortly." });
+    }
+
+    return next();
+  };
+}
+
+app.use(applySecurityHeaders);
+app.use("/api/auth", rateLimit({ windowMs: 15 * 60 * 1000, max: 60, scope: "auth" }));
+app.use("/api/events", rateLimit({ windowMs: 60 * 1000, max: 600, scope: "events" }));
+app.use("/api/feedback", rateLimit({ windowMs: 60 * 1000, max: 120, scope: "feedback" }));
+app.use("/api/recommendations/generate", rateLimit({ windowMs: 60 * 60 * 1000, max: 20, scope: "ai" }));
+
 app.use(
   express.json({
+    limit: "1mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 
 // Session middleware
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "dev-secret-key",
+    store:
+      runtimeEnv.NODE_ENV === "production" && pool
+        ? new PgSessionStore({
+            pool,
+            createTableIfMissing: false,
+            tableName: "sessions",
+          })
+        : undefined,
+    secret: runtimeEnv.SESSION_SECRET || "dev-secret-key",
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      // "auto" keeps secure cookies on HTTPS while allowing localhost HTTP in Docker/dev.
+      secure: runtimeEnv.NODE_ENV === "production" ? "auto" : false,
       sameSite: "lax",
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
@@ -90,7 +150,6 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  validateRuntimeEnv();
   app.use("/api/workspaces", workspaceRouter);
   await registerRoutes(httpServer, app);
 
@@ -118,18 +177,19 @@ app.use((req, res, next) => {
   }
 
   // Start alert evaluation loop if database is available
-  if (db) {
+  const activeDb = db;
+  if (activeDb) {
     // Get all active workspace IDs for alert evaluation
     const getWorkspaceIds = async () => {
       try {
-        const allWorkspaces = await db.select({ id: workspaces.id }).from(workspaces).limit(1000);
+        const allWorkspaces = await activeDb.select({ id: workspaces.id }).from(workspaces).limit(1000);
         return allWorkspaces.map(w => w.id);
       } catch {
         return [];
       }
     };
     
-    startAlertEvaluationLoop(db, getWorkspaceIds);
+    startAlertEvaluationLoop(activeDb, getWorkspaceIds);
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT

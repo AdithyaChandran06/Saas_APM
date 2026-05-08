@@ -1,115 +1,82 @@
-﻿# SaaS APM Platform
+# Quantora
 
-A production-ready SaaS Application Performance Monitoring platform built with modern web technologies.
+Quantora is a production-oriented product intelligence platform for SaaS teams. It collects product events, errors, performance signals, and qualitative feedback, then turns that data into dashboards, alerts, and AI-ranked product recommendations.
 
-## Features
+## Core Capabilities
 
-- **Real-time Event Tracking**: Client-side SDK for capturing user interactions and errors
-- **Analytics Dashboard**: Comprehensive metrics, funnels, cohorts, and retention analysis
-- **AI-Powered Recommendations**: Automated performance optimization suggestions using OpenAI
-- **User Feedback System**: Sentiment analysis and feedback processing
-- **Alerting System**: Configurable alerts with acknowledgment workflow
-- **Multi-tenant Architecture**: Workspace-based isolation with RBAC
-- **Authentication**: Secure user registration and login
+- Event, error, feedback, and performance ingestion
+- Workspace-scoped analytics and API keys
+- Product health dashboards, cohorts, funnels, retention, and alerts
+- AI recommendations with scoring, supporting evidence, and audit logging
+- PostgreSQL persistence with Drizzle migrations
+- React dashboard, Express API, Docker deployment, and a publishable SDK
 
-## Tech Stack
+## Local Development
 
-- **Backend**: Node.js + Express + TypeScript
-- **Frontend**: React + TypeScript + Shadcn UI + Tailwind CSS
-- **Database**: PostgreSQL with Drizzle ORM
-- **AI**: OpenAI integration
-- **Deployment**: Docker + Docker Compose
+Start Postgres:
 
-## Quick Start
+```bash
+docker run --name apm-postgres -e POSTGRES_PASSWORD=password -e POSTGRES_DB=apm_ai -p 5432:5432 -d postgres:16
+```
 
-### Prerequisites
+Start Quantora:
 
-- Docker and Docker Compose
-- Node.js 20+
-- PostgreSQL (or use Docker)
+```bash
+npm install
+DATABASE_URL=postgresql://postgres:password@localhost:5432/apm_ai SESSION_SECRET=local-dev-secret npm run dev
+```
 
-### Development Setup
+Open http://localhost:5000 and create an account from the sign-up page.
 
-1. Clone the repository
-2. Copy environment file:
-   `ash
-   cp .env.production.example .env
-   `
-3. Update .env with your configuration
-4. Start services:
-   `ash
-   docker-compose up -d postgres
-   npm install
-   npm run dev
-   `
-5. Open http://localhost:5000
+## Production
 
-### Production Deployment
+Create a real environment file from `.env.example`, then run:
 
-1. Build and start with Docker Compose:
-   `ash
-   docker-compose up --build
-   `
+```bash
+docker compose up --build
+```
 
-2. Or deploy to cloud platforms:
-   - Railway, Render, or Heroku
-   - Use the provided Dockerfile
+Required production variables:
 
-## Environment Variables
+- `DATABASE_URL`
+- `SESSION_SECRET`
+- `POSTGRES_PASSWORD` when using the included Compose file
+- `OPENAI_API_KEY` or `AI_INTEGRATIONS_OPENAI_API_KEY` if AI recommendations are enabled
 
-See .env.production.example for required environment variables.
+## Verification
 
-## API Documentation
+```bash
+npm run verify
+```
 
-### Authentication
-- POST /api/auth/register - Register new user
-- POST /api/auth/login - Login user
-- POST /api/auth/logout - Logout user
-- GET /api/auth/user - Get current user
+This runs TypeScript checks, builds the SDK, and builds the production app.
 
-### Workspaces
-- POST /api/workspaces - Create workspace
-- GET /api/workspaces - List user's workspaces
-- GET /api/workspaces/:slug - Get workspace details
+See `PRODUCTION_READINESS.md` for the deployment checklist.
 
-### Events & Analytics
-- POST /api/events - Track events
-- GET /api/events - Query events
-- GET /api/analytics/* - Various analytics endpoints
+## API Key Ingestion
 
-## Database Schema
+Use either `X-API-Key` or a Bearer token:
 
-The application uses Drizzle ORM with PostgreSQL. Run migrations:
+```bash
+curl -X POST https://your-domain.com/api/events/batch \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"events":[{"type":"page_view","url":"https://example.com"}]}'
+```
 
-`ash
-npm run db:push
-`
+## SDK
 
-## Client SDK
+```bash
+npm install @quantora/sdk
+```
 
-Include the APM SDK in your applications:
+```ts
+import { createAPMClient } from "@quantora/sdk";
 
-`javascript
-import { APM } from './lib/apm-sdk';
-
-APM.init({
-  apiKey: 'your-api-key',
-  endpoint: 'https://your-app.com/api'
+const quantora = createAPMClient({
+  apiKey: "YOUR_API_KEY",
+  endpoint: "https://your-domain.com",
 });
 
-APM.track('page_view', { url: window.location.href });
-APM.track('error', { message: error.message });
-`
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: 
-pm test
-5. Submit a pull request
-
-## License
-
-MIT License
+quantora.trackEvent("feature_used", { feature: "export" });
+```

@@ -1,5 +1,5 @@
 {
-  "name": "rest-express",
+  "name": "quantora",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
@@ -11,6 +11,8 @@
     "db:push": "drizzle-kit push",
     "seed": "node scripts/seed-demo-data.js",
     "sdk:build": "npm --prefix packages/apm-sdk run build",
+    "test": "npm run check && npm run sdk:build",
+    "verify": "npm run check && npm run sdk:build && npm run build",
     "sdk:publish": "npm --prefix packages/apm-sdk publish --access public"
   },
   "dependencies": {
@@ -53,7 +55,7 @@
     "connect-pg-simple": "^10.0.0",
     "date-fns": "^3.6.0",
     "dotenv": "^17.4.2",
-    "drizzle-orm": "^0.39.3",
+    "drizzle-orm": "^0.45.2",
     "drizzle-zod": "^0.7.1",
     "embla-carousel-react": "^8.6.0",
     "express": "^5.0.1",

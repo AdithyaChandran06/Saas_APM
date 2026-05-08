@@ -1,7 +1,7 @@
 {
-  "name": "@saas-apm/apm-sdk",
+  "name": "@quantora/sdk",
   "version": "0.1.0",
-  "description": "Client SDK for ingesting events, errors, and performance metrics into SaaS APM",
+  "description": "Client SDK for ingesting events, errors, and performance metrics into Quantora",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -14,6 +14,7 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
+    "quantora",
     "apm",
     "analytics",
     "monitoring",

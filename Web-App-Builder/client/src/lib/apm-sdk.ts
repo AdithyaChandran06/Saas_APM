@@ -3,7 +3,7 @@
  * Include this in your application to automatically track events and send them to the APM platform
  *
  * Usage:
- * import { APMClient } from '@your-domain/apm-sdk';
+ * import { APMClient } from '@quantora/sdk';
  *
  * const apm = new APMClient({
  *   apiKey: 'your-api-key',

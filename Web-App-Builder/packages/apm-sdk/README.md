@@ -1,15 +1,15 @@
-# @saas-apm/apm-sdk
+# @quantora/sdk
 
-Client-side SDK for sending product telemetry to the SaaS APM backend.
+Client-side SDK for sending product telemetry to Quantora.
 
 ## Install
 
-npm install @saas-apm/apm-sdk
+npm install @quantora/sdk
 
 ## Usage
 
 ```ts
-import { createAPMClient } from "@saas-apm/apm-sdk";
+import { createAPMClient } from "@quantora/sdk";
 
 const apm = createAPMClient({
   apiKey: "pk_live_xxx",

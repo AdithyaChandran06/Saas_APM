@@ -1,19 +1,26 @@
-﻿FROM node:20-alpine
+FROM node:20-alpine AS deps
 
 WORKDIR /app
-
-# Copy package files
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --no-audit --no-fund
 
-# Copy source code
+FROM deps AS build
+
+WORKDIR /app
 COPY . .
-
-# Build the application
 RUN npm run build
 
-# Expose port
-EXPOSE 5000
+FROM node:20-alpine AS runner
 
-# Start the application
-CMD ["npm", "start"]
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY package*.json ./
+RUN npm install --no-audit --no-fund --omit=dev && npm cache clean --force
+
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/migrations ./migrations
+COPY --from=build /app/drizzle.config.ts ./drizzle.config.ts
+
+EXPOSE 5000
+CMD ["node", "dist/index.cjs"]
